@@ -1,36 +1,75 @@
-# f14_aero.py — v1.2.1-data
-# Change: default CSV path now resolves to ./data/f14_aero.csv via data_loaders.
+# Aerodynamic Model for F-14 Performance Toolkit
+# Hybrid approach: CSV data + NATOPS-based defaults for resilience
+# Provides lift (CL) and drag (CD) coefficients across Mach, sweep, and flap configs
 
-from __future__ import annotations
-import math
+import numpy as np
 import pandas as pd
-from data_loaders import load_aero_csv
-
-S_WING_FT2 = 565.0  # ref area (approx)
-S_WING_M2 = S_WING_FT2 * 0.09290304
+from data_loaders import resolve_data_path
 
 class F14Aero:
-    def __init__(self, path: str | None = None):
-        # When path is None, load_aero_csv() will use ./data/f14_aero.csv
-        self.df = load_aero_csv(path)
+    def __init__(self, csv_file="f14_aero.csv"):
+        try:
+            self.df = pd.read_csv(resolve_data_path(csv_file))
+        except FileNotFoundError:
+            self.df = None
 
-    def polar(self, config: str, sweep_deg: int | float = 20):
-        # Find nearest entry for this config & sweep
-        d = self.df[self.df["Config"] == config]
-        if d.empty:
-            raise ValueError(f"Config not found: {config}")
-        if "WingSweep_deg" in d.columns and d["WingSweep_deg"].nunique() > 1:
-            # choose nearest sweep value
-            diffs = (d["WingSweep_deg"] - float(sweep_deg)).abs()
-            row = d.iloc[diffs.idxmin()]
+        # NATOPS baseline defaults (approximate, for fallback)
+        self.defaults = {
+            ("UP", 20): {"CLmax": 1.2, "CD0": 0.022, "k": 0.045},
+            ("MANEUVER", 20): {"CLmax": 1.6, "CD0": 0.035, "k": 0.055},
+            ("FULL", 20): {"CLmax": 2.1, "CD0": 0.055, "k": 0.065},
+        }
+
+        self.wing_area = 565.0  # ft²
+
+    def _nearest_config(self, config: str, sweep: float):
+        """Get nearest matching config+sweep from CSV or defaults."""
+        if self.df is not None:
+            sub_df = self.df[self.df["config"] == config.upper()]
+            if not sub_df.empty:
+                sweeps = sub_df["sweep"].unique()
+                nearest_sweep = min(sweeps, key=lambda x: abs(x - sweep))
+                row = sub_df[sub_df["sweep"] == nearest_sweep].iloc[0]
+                return {
+                    "CLmax": row["CLmax"],
+                    "CD0": row["CD0"],
+                    "k": row["k"],
+                    "Sweep": nearest_sweep,
+                    "Source": "CSV",
+                }
+
+        # Fallback to defaults
+        key = (config.upper(), 20)
+        if key in self.defaults:
+            vals = self.defaults[key]
+            return {**vals, "Sweep": 20, "Source": "NATOPS Default"}
         else:
-            row = d.iloc[0]
-        return float(row["CLmax"]), float(row["CD0"]), float(row["k"])
+            raise ValueError(f"No aero data for config={config}, sweep={sweep}")
 
-    def lift_coeff(self, weight_lbf: float, rho: float, V_mps: float) -> float:
+    def polar(self, config: str, sweep: float = 20, mach: float = 0.4):
+        """Return CLmax, CD0, k for given flap config, sweep, and Mach."""
+        base = self._nearest_config(config, sweep)
+
+        # Apply Mach corrections (placeholder quadratic scaling)
+        CLmax = base["CLmax"] * (1 - 0.05 * max(0, mach - 0.9))
+        CD0 = base["CD0"] * (1 + 0.25 * mach**2)
+        k = base["k"] * (1 + 0.1 * mach)
+
+        return {
+            "Config": config.upper(),
+            "Sweep": base["Sweep"],
+            "CLmax": CLmax,
+            "CD0": CD0,
+            "k": k,
+            "Source": base["Source"],
+        }
+
+    def lift_coeff(self, weight_lbf: float, rho: float, V_mps: float):
+        """Calculate CL required for steady level flight."""
         q = 0.5 * rho * V_mps**2
-        L = weight_lbf * 4.4482216153  # N
-        return L / (q * S_WING_M2)
+        CL = weight_lbf / (q * self.wing_area)
+        return CL
 
-    def drag_coeff(self, CL: float, CD0: float, k: float, cd_misc: float = 0.0) -> float:
+    def drag_coeff(self, CL: float, CD0: float, k: float, cd_misc: float = 0.0):
+        """Calculate CD for given CL."""
         return CD0 + k * CL**2 + cd_misc
