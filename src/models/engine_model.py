@@ -1,75 +1,75 @@
-# Engine Model for F-14 Performance Toolkit
-# Fully refined F110 engine implementation (MIL, AB, REDUCED)
-# Includes interpolation, nonlinear RPM-thrust mapping, and variable AB fuel flow.
+# Aerodynamic Model for F-14 Performance Toolkit
+# Hybrid approach: CSV data + NATOPS-based defaults for resilience
+# Provides lift (CL) and drag (CD) coefficients across Mach, sweep, and flap configs
 
 import numpy as np
 import pandas as pd
 from data_loaders import resolve_data_path
 
-class F110Engine:
-    def __init__(self, csv_file="f110_tff_model.csv"):
-        self.df = pd.read_csv(resolve_data_path(csv_file))
+class F14Aero:
+    def __init__(self, csv_file="f14_aero.csv"):
+        try:
+            self.df = pd.read_csv(resolve_data_path(csv_file))
+        except FileNotFoundError:
+            self.df = None
 
-    def _interpolate_thrust(self, alt_ft: float, temp_c: float, mach: float, mode: str = "MIL") -> float:
-        """Interpolate thrust across altitude, temperature, and Mach."""
-        data = self.df
-
-        alt_vals = data["alt_ft"].unique()
-        temp_vals = data["Temp"].unique()
-
-        alt_ft = np.clip(alt_ft, min(alt_vals), max(alt_vals))
-        temp_c = np.clip(temp_c, min(temp_vals), max(temp_vals))
-
-        sub_df = data[(data["alt_ft"] == alt_ft) & (data["Temp"] == temp_c)]
-        if sub_df.empty:
-            base_thr = data.iloc[0]["THRUST_MIL"]
-        else:
-            base_thr = sub_df["THRUST_MIL"].values[0]
-
-        if mode.upper() == "MIL":
-            mach_corr = 1 + 0.25 * mach + 0.05 * mach**2
-            thrust = base_thr * mach_corr
-        elif mode.upper() == "AB":
-            mach_corr = 1 + 0.15 * mach
-            thrust = base_thr * 1.95 * mach_corr
-        elif mode.upper() == "REDUCED":
-            thrust = base_thr * 0.9
-        else:
-            raise ValueError(f"Unknown thrust mode: {mode}")
-
-        return thrust
-
-    def _thrust_to_rpm_ff(self, thrust: float, mode: str = "MIL") -> tuple:
-        """Map thrust to approximate RPM (%) and fuel flow (PPH)."""
-        if mode.upper() == "MIL":
-            if thrust < 5000:
-                rpm = 71 + (thrust / 5000) * 10
-                ff = 3000 + (thrust / 5000) * 2000
-            elif thrust < 12000:
-                rpm = 81 + (thrust - 5000) / 7000 * 10
-                ff = 5000 + (thrust - 5000) / 7000 * 4000
-            else:
-                rpm = 91 + (thrust - 12000) / 4000 * 8
-                ff = 9000 + (thrust - 12000) / 4000 * 3000
-        elif mode.upper() == "AB":
-            rpm = 99.5
-            ff = 20000 + (thrust - 25000) * 0.3
-        elif mode.upper() == "REDUCED":
-            rpm = 85 + (thrust / 18000) * 10
-            ff = 6000 + (thrust / 18000) * 4000
-        else:
-            raise ValueError(f"Unknown mode: {mode}")
-
-        return rpm, ff
-
-    def compute(self, alt_ft: float, temp_c: float, mach: float, mode: str = "MIL") -> dict:
-        """Unified F110 engine performance output."""
-        thrust = self._interpolate_thrust(alt_ft, temp_c, mach, mode)
-        rpm, ff = self._thrust_to_rpm_ff(thrust, mode)
-        return {
-            "Engine": "F110",
-            "Mode": mode.upper(),
-            "Thrust": thrust,
-            "RPM": rpm,
-            "FuelFlow": ff,
+        # NATOPS baseline defaults (approximate, for fallback)
+        self.defaults = {
+            ("UP", 20): {"CLmax": 1.2, "CD0": 0.022, "k": 0.045},
+            ("MANEUVER", 20): {"CLmax": 1.6, "CD0": 0.035, "k": 0.055},
+            ("FULL", 20): {"CLmax": 2.1, "CD0": 0.055, "k": 0.065},
         }
+
+        self.wing_area = 565.0  # ft²
+
+    def _nearest_config(self, config: str, sweep: float):
+        """Get nearest matching config+sweep from CSV or defaults."""
+        if self.df is not None:
+            sub_df = self.df[self.df["config"] == config.upper()]
+            if not sub_df.empty:
+                sweeps = sub_df["sweep"].unique()
+                nearest_sweep = min(sweeps, key=lambda x: abs(x - sweep))
+                row = sub_df[sub_df["sweep"] == nearest_sweep].iloc[0]
+                return {
+                    "CLmax": row["CLmax"],
+                    "CD0": row["CD0"],
+                    "k": row["k"],
+                    "Sweep": nearest_sweep,
+                    "Source": "CSV",
+                }
+
+        # Fallback to defaults
+        key = (config.upper(), 20)
+        if key in self.defaults:
+            vals = self.defaults[key]
+            return {**vals, "Sweep": 20, "Source": "NATOPS Default"}
+        else:
+            raise ValueError(f"No aero data for config={config}, sweep={sweep}")
+
+    def polar(self, config: str, sweep: float = 20, mach: float = 0.4):
+        """Return CLmax, CD0, k for given flap config, sweep, and Mach."""
+        base = self._nearest_config(config, sweep)
+
+        # Apply Mach corrections (placeholder quadratic scaling)
+        CLmax = base["CLmax"] * (1 - 0.05 * max(0, mach - 0.9))
+        CD0 = base["CD0"] * (1 + 0.25 * mach**2)
+        k = base["k"] * (1 + 0.1 * mach)
+
+        return {
+            "Config": config.upper(),
+            "Sweep": base["Sweep"],
+            "CLmax": CLmax,
+            "CD0": CD0,
+            "k": k,
+            "Source": base["Source"],
+        }
+
+    def lift_coeff(self, weight_lbf: float, rho: float, V_mps: float):
+        """Calculate CL required for steady level flight."""
+        q = 0.5 * rho * V_mps**2
+        CL = weight_lbf / (q * self.wing_area)
+        return CL
+
+    def drag_coeff(self, CL: float, CD0: float, k: float, cd_misc: float = 0.0):
+        """Calculate CD for given CL."""
+        return CD0 + k * CL**2 + cd_misc
