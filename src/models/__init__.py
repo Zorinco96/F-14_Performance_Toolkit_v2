@@ -1,1 +1,1 @@
-# Marks src as a package
+# Marks models as a package
