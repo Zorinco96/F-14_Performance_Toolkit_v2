@@ -1,75 +1,91 @@
-# Aerodynamic Model for F-14 Performance Toolkit
-# Hybrid approach: CSV data + NATOPS-based defaults for resilience
-# Provides lift (CL) and drag (CD) coefficients across Mach, sweep, and flap configs
+"""
+Refined Aerodynamic Model for F-14 Tomcat
+Aligned with expanded NATOPS-style aero dataset (f14_aero.csv)
 
-import numpy as np
+Enhancements:
+- Auto-sweep scheduling (if auto=True)
+- Effective wing area scaling with sweep angle
+- Stall speed & best glide speed helper functions
+"""
+
 import pandas as pd
-from data_loaders import resolve_data_path
+import numpy as np
+from src.data_loaders import resolve_data_path
 
 class F14Aero:
-    def __init__(self, csv_file="f14_aero.csv"):
-        try:
-            self.df = pd.read_csv(resolve_data_path(csv_file))
-        except FileNotFoundError:
-            self.df = None
+    def __init__(self, csv_file="data/f14_aero.csv"):
+        self.csv_file = resolve_data_path(csv_file)
+        self.df = pd.read_csv(self.csv_file)
 
-        # NATOPS baseline defaults (approximate, for fallback)
-        self.defaults = {
-            ("UP", 20): {"CLmax": 1.2, "CD0": 0.022, "k": 0.045},
-            ("MANEUVER", 20): {"CLmax": 1.6, "CD0": 0.035, "k": 0.055},
-            ("FULL", 20): {"CLmax": 2.1, "CD0": 0.055, "k": 0.065},
-        }
+        # Normalize column names
+        self.df.columns = [c.lower() for c in self.df.columns]
 
-        self.wing_area = 565.0  # ft²
+        # Validate columns
+        required = {"config", "sweep", "mach", "clmax", "cd0", "k"}
+        if not required.issubset(set(self.df.columns)):
+            raise ValueError(f"Aero CSV missing required columns: {required - set(self.df.columns)}")
 
-    def _nearest_config(self, config: str, sweep: float):
-        """Get nearest matching config+sweep from CSV or defaults."""
-        if self.df is not None:
-            sub_df = self.df[self.df["config"] == config.upper()]
-            if not sub_df.empty:
-                sweeps = sub_df["sweep"].unique()
-                nearest_sweep = min(sweeps, key=lambda x: abs(x - sweep))
-                row = sub_df[sub_df["sweep"] == nearest_sweep].iloc[0]
-                return {
-                    "CLmax": row["CLmax"],
-                    "CD0": row["CD0"],
-                    "k": row["k"],
-                    "Sweep": nearest_sweep,
-                    "Source": "CSV",
-                }
+        # Reference wing area (ft², unswept)
+        self.wing_area_ref = 565.0
 
-        # Fallback to defaults
-        key = (config.upper(), 20)
-        if key in self.defaults:
-            vals = self.defaults[key]
-            return {**vals, "Sweep": 20, "Source": "NATOPS Default"}
+    def _nearest_config(self, config: str):
+        """Filter dataset for given config (default CLEAN if not found)."""
+        config = config.upper()
+        if config not in self.df["config"].unique():
+            config = "CLEAN"
+        return self.df[self.df["config"] == config]
+
+    def _auto_sweep(self, mach: float) -> float:
+        """Approximate NATOPS auto-sweep schedule (deg)."""
+        if mach < 0.6:
+            return 20
+        elif mach < 0.9:
+            return 35
+        elif mach < 1.2:
+            return 55
         else:
-            raise ValueError(f"No aero data for config={config}, sweep={sweep}")
+            return 68
 
-    def polar(self, config: str, sweep: float = 20, mach: float = 0.4):
-        """Return CLmax, CD0, k for given flap config, sweep, and Mach."""
-        base = self._nearest_config(config, sweep)
+    def polar(self, config: str, sweep: float = 20, mach: float = 0.2, auto: bool = False):
+        """
+        Return aerodynamic coefficients for given config, sweep, and Mach.
+        Performs nearest-match sweep and interpolates across Mach levels.
+        """
+        if auto:
+            sweep = self._auto_sweep(mach)
 
-        # Apply Mach corrections (placeholder quadratic scaling)
-        CLmax = base["CLmax"] * (1 - 0.05 * max(0, mach - 0.9))
-        CD0 = base["CD0"] * (1 + 0.25 * mach**2)
-        k = base["k"] * (1 + 0.1 * mach)
+        sub_df = self._nearest_config(config)
 
-        return {
-            "Config": config.upper(),
-            "Sweep": base["Sweep"],
-            "CLmax": CLmax,
-            "CD0": CD0,
-            "k": k,
-            "Source": base["Source"],
-        }
+        # Nearest sweep available
+        sweeps = np.array(sub_df["sweep"].unique())
+        nearest_sweep = sweeps[np.abs(sweeps - sweep).argmin()]
+        sub_df = sub_df[sub_df["sweep"] == nearest_sweep]
 
-    def lift_coeff(self, weight_lbf: float, rho: float, V_mps: float):
-        """Calculate CL required for steady level flight."""
-        q = 0.5 * rho * V_mps**2
-        CL = weight_lbf / (q * self.wing_area)
-        return CL
+        # Interpolate in Mach space
+        mach_values = sub_df["mach"].values
+        result = {}
+        for col in ["clmax", "cd0", "k", "stall_aoa_deg", "l_d_max"]:
+            result[col] = float(np.interp(mach, mach_values, sub_df[col].values))
 
-    def drag_coeff(self, CL: float, CD0: float, k: float, cd_misc: float = 0.0):
-        """Calculate CD for given CL."""
-        return CD0 + k * CL**2 + cd_misc
+        # Scale wing area with sweep
+        sweep_rad = np.radians(nearest_sweep)
+        result["wing_area_eff"] = self.wing_area_ref * np.cos(sweep_rad)
+
+        return result
+
+    def stall_speed(self, weight: float, rho: float, config: str, sweep: float = 20, mach: float = 0.2):
+        """Compute stall speed (ft/s) for given weight & density."""
+        polar = self.polar(config, sweep, mach)
+        CLmax = polar["clmax"]
+        S = polar["wing_area_eff"]
+        Vstall = np.sqrt((2 * weight) / (rho * S * CLmax))
+        return Vstall
+
+    def best_glide_speed(self, weight: float, rho: float, config: str, sweep: float = 20, mach: float = 0.6):
+        """Compute best glide speed (ft/s) from L/Dmax."""
+        polar = self.polar(config, sweep, mach)
+        # Approximate best glide CL ~ sqrt(CD0/k)
+        CL_best = np.sqrt(polar["cd0"] / polar["k"])
+        S = polar["wing_area_eff"]
+        V_best = np.sqrt((2 * weight) / (rho * S * CL_best))
+        return V_best
