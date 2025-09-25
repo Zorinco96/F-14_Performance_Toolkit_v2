@@ -1,127 +1,87 @@
+# Advanced Derate Policy for F-14 Performance Toolkit
+# Hybrid model: JSON guardrails + NATOPS/CSV performance validation
+# Includes AEO/OEI climb checks, iterative RPM bumping, safety factor, and fuel savings
 
-# ============================================================
-# F-14 Performance Calculator for DCS World — Derate Policy
-# File: derate.py
-# Version: v1.2.0-overhaul1 (2025-09-21)
-# ============================================================
-from __future__ import annotations
 import json
-from dataclasses import dataclass
-from functools import lru_cache
-from typing import Dict, Any, Tuple
+import os
+from data_loaders import load_takeoff_data
+from src.models.takeoff_model import calc_takeoff
 
-DEFAULT_CFG_PATH = "data/derate_config.json"
+# Path to derate configuration JSON
+CONFIG_PATH = os.path.join(os.path.dirname(__file__), "../../data/derate_config.json")
 
-# --- Helpers ---
+def load_config():
+    with open(CONFIG_PATH, "r") as f:
+        return json.load(f)
 
-def _nearest_flap_key(deg: float) -> str:
-    """Return the nearest flap key among {'0','20','35'} for a given flap angle in degrees."""
-    targets = [0.0, 20.0, 35.0]
-    nearest = min(targets, key=lambda t: abs((deg or 0.0) - t))
-    return str(int(nearest))
-
-@lru_cache(maxsize=1)
-def _load_cfg(path: str = DEFAULT_CFG_PATH) -> Dict[str, Any]:
-    try:
-        with open(path, "r") as f:
-            return json.load(f)
-    except Exception:
-        # Minimal safe fallback
-        return {
-            "policy": {"allow_ab": False, "min_takeoff_rpm_pct": 85},
-            "floors": {"min_pct_by_flap_deg": {"0": 85, "20": 90, "35": 96}},
-            "thrust_model": {"thrust_exponent_m": {"0": 0.75, "20": 0.75, "35": 0.75}, "min_idle_ff_pph": 1200},
-            "safety": {"runway_factor": 1.10},
-            # legacy mirrors
-            "allow_ab": False,
-            "min_idle_ff_pph": 1200,
-            "thrust_exponent_m": {"0": 0.75, "20": 0.75, "35": 0.75},
-            "min_pct_by_flap_deg": {"0": 85, "20": 90, "35": 96},
-        }
-
-def _get_section(cfg: Dict[str, Any], path_keys, legacy_key=None, default=None):
-    node = cfg
-    for k in path_keys:
-        if not isinstance(node, dict) or k not in node:
-            node = None
-            break
-        node = node[k]
-    if node is not None:
-        return node
-    # fallback to legacy flat key if provided
-    if legacy_key and isinstance(cfg, dict):
-        return cfg.get(legacy_key, default)
-    return default
-
-# --- Policy Accessors ---
-
-def allow_ab(path: str = DEFAULT_CFG_PATH) -> bool:
-    cfg = _load_cfg(path)
-    val = _get_section(cfg, ["policy", "allow_ab"], legacy_key="allow_ab", default=False)
-    return bool(val)
-
-def min_takeoff_rpm_pct(path: str = DEFAULT_CFG_PATH) -> int:
-    cfg = _load_cfg(path)
-    val = _get_section(cfg, ["policy", "min_takeoff_rpm_pct"], default=85)
-    return int(val)
-
-def runway_factor(path: str = DEFAULT_CFG_PATH) -> float:
-    cfg = _load_cfg(path)
-    val = _get_section(cfg, ["safety", "runway_factor"], default=1.10)
-    return float(val)
-
-def floor_pct_for_flaps(flap_deg: float, path: str = DEFAULT_CFG_PATH) -> int:
-    cfg = _load_cfg(path)
-    key = _nearest_flap_key(flap_deg)
-    floors = _get_section(cfg, ["floors", "min_pct_by_flap_deg"], legacy_key="min_pct_by_flap_deg", default={})
-    floor = floors.get(key, 85)
-    # Enforce absolute minimum RPM for takeoff
-    floor = max(int(floor), min_takeoff_rpm_pct(path))
-    return int(floor)
-
-def m_exponent_for_flaps(flap_deg: float, path: str = DEFAULT_CFG_PATH) -> float:
-    cfg = _load_cfg(path)
-    key = _nearest_flap_key(flap_deg)
-    m_map = _get_section(cfg, ["thrust_model", "thrust_exponent_m"], legacy_key="thrust_exponent_m", default={})
-    return float(m_map.get(key, 0.75))
-
-def min_idle_ff_pph(path: str = DEFAULT_CFG_PATH) -> int:
-    cfg = _load_cfg(path)
-    val = _get_section(cfg, ["thrust_model", "min_idle_ff_pph"], legacy_key="min_idle_ff_pph", default=1200)
-    return int(val)
-
-# --- Clamp Utility ---
-
-@dataclass
-class ClampResult:
-    requested_pct: float
-    applied_pct: float
-    floor_pct: int
-    clamped_to_floor: bool
-
-def clamp_derate_pct(requested_pct: float, flap_deg: float, path: str = DEFAULT_CFG_PATH) -> ClampResult:
-    """Clamp a requested %RPM to the flap-specific floor and absolute minimum takeoff RPM.
-    Returns the applied value and whether we clamped to a floor.
+def validate_derate(weight, temp, pressure, flap_setting, requested_rpm_pct):
     """
-    floor = floor_pct_for_flaps(flap_deg, path)
-    applied = max(float(requested_pct or 0.0), float(floor))
-    return ClampResult(
-        requested_pct=float(requested_pct or 0.0),
-        applied_pct=applied,
-        floor_pct=int(floor),
-        clamped_to_floor=(applied > (requested_pct or 0.0))
-    )
+    Validates derated thrust setting against policy + NATOPS performance data.
 
-# --- Convenience API for UI/Core ---
+    :param weight: Aircraft weight (lbs)
+    :param temp: Ambient OAT (C)
+    :param pressure: Baro Pressure (inHg)
+    :param flap_setting: UP, MAN, FULL
+    :param requested_rpm_pct: Pilot-requested derate RPM % (e.g. 92)
+    :return: dict with validated derate outputs (RPM, FF, TODR, ASD, climb data, fuel savings)
+    """
+    cfg = load_config()
 
-def get_policy_snapshot(path: str = DEFAULT_CFG_PATH) -> Dict[str, Any]:
-    """Return a single dict snapshot the UI can display in debug/calibration."""
-    cfg = _load_cfg(path)
+    # Policy floors per flap setting
+    flap_floor_map = cfg.get("flap_floor_pct", {"UP": 85, "MAN": 90, "FULL": 95})
+    min_rpm_pct = flap_floor_map.get(flap_setting, cfg.get("min_takeoff_rpm_pct", 85))
+
+    rpm_pct = max(requested_rpm_pct, min_rpm_pct)
+    safety_factor = cfg.get("safety_factor", 1.10)
+
+    # Iteratively bump RPM until climb requirements are satisfied
+    max_rpm = 100
+    climb_valid_aeo = False
+    climb_valid_oei = False
+    while rpm_pct <= max_rpm:
+        perf = calc_takeoff(weight, temp, pressure, "REDUCED", flap_setting)
+        climb_grad = perf.get("ClimbGradient", 0)
+
+        # Placeholder: treat AEO as reported gradient, OEI as half
+        climb_grad_aeo = climb_grad
+        climb_grad_oei = climb_grad * 0.5
+
+        climb_valid_aeo = climb_grad_aeo >= 300
+        climb_valid_oei = climb_grad_oei >= 200
+
+        if climb_valid_aeo and climb_valid_oei:
+            break
+        rpm_pct += 1
+
+    status = "Derate accepted." if (climb_valid_aeo and climb_valid_oei) else "Max MIL required."
+
+    # Estimate fuel flow (placeholder scaling)
+    idle_ff = cfg.get("idle_ff_pph", 3000)
+    max_ff = cfg.get("mil_ff_pph", 10000)
+    ff = idle_ff + (rpm_pct / 100.0) * (max_ff - idle_ff)
+
+    # Fuel savings compared to full MIL
+    fuel_saving = max_ff - ff
+
+    # TODR/ASD with safety factor
+    asd = perf.get("ASD", 7000) * safety_factor
+    todr = perf.get("TODR", 7500) * safety_factor
+
     return {
-        "allow_ab": allow_ab(path),
-        "min_takeoff_rpm_pct": min_takeoff_rpm_pct(path),
-        "floors": _get_section(cfg, ["floors", "min_pct_by_flap_deg"], legacy_key="min_pct_by_flap_deg", default={}),
-        "thrust_exponent_m": _get_section(cfg, ["thrust_model", "thrust_exponent_m"], legacy_key="thrust_exponent_m", default={}),
-        "min_idle_ff_pph": min_idle_ff_pph(path),
-        "runway_factor": runway_factor(path),
+        "RequestedRPM": requested_rpm_pct,
+        "ValidatedRPM": rpm_pct,
+        "FuelFlow": ff,
+        "FuelSaved": fuel_saving,
+        "Flaps": flap_setting,
+        "ASD": asd,
+        "TODR": todr,
+        "ClimbGradientAEO": climb_grad_aeo,
+        "ClimbGradientOEI": climb_grad_oei,
+        "ClimbValidAEO": climb_valid_aeo,
+        "ClimbValidOEI": climb_valid_oei,
+        "Status": status
     }
+
+def get_policy_snapshot():
+    """Return a snapshot of derate policy settings."""
+    return load_config()
