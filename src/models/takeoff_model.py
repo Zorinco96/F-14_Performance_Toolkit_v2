@@ -1,6 +1,3 @@
-# Takeoff Model for F-14 Performance Toolkit (Integrated)
-# Computes NATOPS-based takeoff performance with engine+aero integration.
-
 import numpy as np
 from src.models.engine_model import F110Engine
 from src.models.f14_aero import F14Aero
@@ -19,11 +16,9 @@ class TakeoffModel:
         return data_dict.get(key, default)
 
     def compute_takeoff(self, weight, alt_ft, oat_c, thrust_mode="MIL", flap_setting="MAN", runway_length=10000, derate_rpm=None):
-        """
-        Calculate takeoff performance for the F-14.
-        """
         mach_to = 0.25
 
+        # --- Engine thrust ---
         if thrust_mode == "REDUCED" and derate_rpm:
             perf = self.engine.compute_from_rpm(alt_ft, oat_c, mach_to, derate_rpm)
         else:
@@ -33,6 +28,7 @@ class TakeoffModel:
         rpm = perf["RPM"]
         fuel_flow = perf["FuelFlow"]
 
+        # --- Aerodynamics ---
         polar = self.aero.polar(flap_setting, sweep=20, mach=mach_to)
         rho = self._isa_density(alt_ft)
         v_to = np.sqrt((2 * weight) / (rho * self.aero.wing_area * polar["CLmax"]))
@@ -41,11 +37,13 @@ class TakeoffModel:
         vfs = 1.4 * v_to
         v1 = max(100, min(vr, 0.95 * vr))
 
+        # --- ASD & TODR ---
         asd = self._interpolate(self.asd_data, "asd", 7000)
         todr = self._interpolate(self.takeoff_data, "over_todr", 7500)
         asd *= self.reserve_factor
         todr *= self.reserve_factor
 
+        # --- Climb gradients ---
         drag = 0.5 * rho * (vr * 1.687)**2 * self.aero.wing_area * (
             polar["CD0"] + polar["k"] * (weight / (0.5 * rho * (vr * 1.687)**2 * self.aero.wing_area))**2
         )
@@ -56,6 +54,7 @@ class TakeoffModel:
         excess_thrust_oei = thrust_oei - drag
         climb_grad_oei = max(0, (excess_thrust_oei / weight) * 6076)
 
+        # --- Warnings ---
         warnings = []
         if asd > runway_length or todr > runway_length:
             warnings.append("Runway too short for computed ASD/TODR!")
