@@ -73,17 +73,17 @@ class F14Aero:
 
         return result
 
-    def stall_speed(self, weight: float, rho: float, config: str, sweep: float = 20, mach: float = 0.2):
+    def stall_speed(self, weight: float, rho: float, config: str, sweep: float = 20, mach: float = 0.2, auto: bool = False):
         """Compute stall speed (ft/s) for given weight & density."""
-        polar = self.polar(config, sweep, mach)
+        polar = self.polar(config, sweep, mach, auto=auto)
         CLmax = polar["clmax"]
         S = polar["wing_area_eff"]
         Vstall = np.sqrt((2 * weight) / (rho * S * CLmax))
         return Vstall
 
-    def best_glide_speed(self, weight: float, rho: float, config: str, sweep: float = 20, mach: float = 0.6):
+    def best_glide_speed(self, weight: float, rho: float, config: str, sweep: float = 20, mach: float = 0.6, auto: bool = False):
         """Compute best glide speed (ft/s) from L/Dmax."""
-        polar = self.polar(config, sweep, mach)
+        polar = self.polar(config, sweep, mach, auto=auto)
         # Approximate best glide CL ~ sqrt(CD0/k)
         CL_best = np.sqrt(polar["cd0"] / polar["k"])
         S = polar["wing_area_eff"]
