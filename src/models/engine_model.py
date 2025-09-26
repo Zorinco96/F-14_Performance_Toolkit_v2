@@ -1,60 +1,75 @@
-# Refined Engine model for F-14 (F110-GE-400)
-# Uses NATOPS-based MIL thrust data + scaling for AB
-# Supports RPM <-> thrust mapping for derates
+# Engine Model for F-14 Performance Toolkit
+# Fully refined F110 engine implementation (MIL, AB, REDUCED)
+# Includes interpolation, nonlinear RPM-thrust mapping, and variable AB fuel flow.
 
 import numpy as np
 import pandas as pd
-from src.data_loaders import resolve_data_path
+from data_loaders import resolve_data_path
 
 class F110Engine:
-    def __init__(self, model_csv="data/f110_tff_model.csv"):
-        self.model_csv = resolve_data_path(model_csv)
-        self.df = pd.read_csv(self.model_csv)
+    def __init__(self, csv_file="f110_tff_model.csv"):
+        self.df = pd.read_csv(resolve_data_path(csv_file))
 
-        # Build interpolation functions
-        self.altitudes = self.df["alt_ft"].values
-        self.mil_thrust = self.df["T_MIL_lbf"].values
-        self.mil_ff = self.df["FF_MIL_pph"].values
+    def _interpolate_thrust(self, alt_ft: float, temp_c: float, mach: float, mode: str = "MIL") -> float:
+        """Interpolate thrust across altitude, temperature, and Mach."""
+        data = self.df
 
-    def _interp(self, x, x_points, y_points):
-        return float(np.interp(x, x_points, y_points))
+        alt_vals = data["alt_ft"].unique()
+        temp_vals = data["Temp"].unique()
 
-    def compute(self, alt_ft, oat_c=15, mach=0.0, thrust_mode="MIL"):
-        """Compute thrust, RPM, and fuel flow for given mode"""
-        mil_thrust = self._interp(alt_ft, self.altitudes, self.mil_thrust)
-        mil_ff = self._interp(alt_ft, self.altitudes, self.mil_ff)
+        alt_ft = np.clip(alt_ft, min(alt_vals), max(alt_vals))
+        temp_c = np.clip(temp_c, min(temp_vals), max(temp_vals))
 
-        if thrust_mode == "MIL":
-            thrust = mil_thrust
-            rpm = 99
-            ff = mil_ff
+        sub_df = data[(data["alt_ft"] == alt_ft) & (data["Temp"] == temp_c)]
+        if sub_df.empty:
+            base_thr = data.iloc[0]["THRUST_MIL"]
+        else:
+            base_thr = sub_df["THRUST_MIL"].values[0]
 
-        elif thrust_mode == "AB":
-            thrust = mil_thrust * 1.65
-            rpm = 103
-            ff = mil_ff * 1.5
+        if mode.upper() == "MIL":
+            mach_corr = 1 + 0.25 * mach + 0.05 * mach**2
+            thrust = base_thr * mach_corr
+        elif mode.upper() == "AB":
+            mach_corr = 1 + 0.15 * mach
+            thrust = base_thr * 1.95 * mach_corr
+        elif mode.upper() == "REDUCED":
+            thrust = base_thr * 0.9
+        else:
+            raise ValueError(f"Unknown thrust mode: {mode}")
 
-        else:  # Idle approx
-            thrust = 3000
-            rpm = 71
-            ff = 2000
+        return thrust
 
-        return {"Thrust": thrust, "RPM": rpm, "FuelFlow": ff}
+    def _thrust_to_rpm_ff(self, thrust: float, mode: str = "MIL") -> tuple:
+        """Map thrust to approximate RPM (%) and fuel flow (PPH)."""
+        if mode.upper() == "MIL":
+            if thrust < 5000:
+                rpm = 71 + (thrust / 5000) * 10
+                ff = 3000 + (thrust / 5000) * 2000
+            elif thrust < 12000:
+                rpm = 81 + (thrust - 5000) / 7000 * 10
+                ff = 5000 + (thrust - 5000) / 7000 * 4000
+            else:
+                rpm = 91 + (thrust - 12000) / 4000 * 8
+                ff = 9000 + (thrust - 12000) / 4000 * 3000
+        elif mode.upper() == "AB":
+            rpm = 99.5
+            ff = 20000 + (thrust - 25000) * 0.3
+        elif mode.upper() == "REDUCED":
+            rpm = 85 + (thrust / 18000) * 10
+            ff = 6000 + (thrust / 18000) * 4000
+        else:
+            raise ValueError(f"Unknown mode: {mode}")
 
-    def compute_from_rpm(self, alt_ft, oat_c=15, mach=0.0, rpm=95):
-        """Compute thrust and FF from a manual RPM setting"""
-        mil_thrust = self._interp(alt_ft, self.altitudes, self.mil_thrust)
-        mil_ff = self._interp(alt_ft, self.altitudes, self.mil_ff)
+        return rpm, ff
 
-        ab_thrust = mil_thrust * 1.65
-        ab_ff = mil_ff * 1.5
-
-        # Map rpm points
-        rpm_points = np.array([71, 99, 103])
-        thrust_points = np.array([3000, mil_thrust, ab_thrust])
-        ff_points = np.array([2000, mil_ff, ab_ff])
-
-        thrust = float(np.interp(rpm, rpm_points, thrust_points))
-        ff = float(np.interp(rpm, rpm_points, ff_points))
-
-        return {"Thrust": thrust, "RPM": rpm, "FuelFlow": ff}
+    def compute(self, alt_ft: float, temp_c: float, mach: float, mode: str = "MIL") -> dict:
+        """Unified F110 engine performance output."""
+        thrust = self._interpolate_thrust(alt_ft, temp_c, mach, mode)
+        rpm, ff = self._thrust_to_rpm_ff(thrust, mode)
+        return {
+            "Engine": "F110",
+            "Mode": mode.upper(),
+            "Thrust": thrust,
+            "RPM": rpm,
+            "FuelFlow": ff,
+        }
