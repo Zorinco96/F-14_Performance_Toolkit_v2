@@ -10,7 +10,7 @@ Enhancements:
 
 import pandas as pd
 import numpy as np
-from src.data_loaders import resolve_data_path
+from src.uitls.data_loaders import resolve_data_path
 
 class F14Aero:
     def __init__(self, csv_file="data/f14_aero.csv"):
