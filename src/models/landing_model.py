@@ -1,10 +1,12 @@
 # Landing Model for F-14 Performance Toolkit (Enhanced)
-# Computes landing performance with flap-specific V-speeds, 
-# pressure altitude corrections, wet/contaminated runway factors, 
+# Computes landing performance with flap-specific V-speeds,
+# pressure altitude corrections, wet/contaminated runway factors,
 # and OEI go-around integration with climb_model.
 
 import numpy as np
 from src.models.climb_model import ClimbModel
+from src.utils.data_loaders import resolve_data_path, load_is_csv
+
 
 class LandingModel:
     def __init__(self):
@@ -14,6 +16,7 @@ class LandingModel:
         self.Vfs_base = {"UP": 160, "MAN": 145, "FULL": 135}
         self.base_weight = 54000  # lbs reference
 
+        # Safety margin factor for landing distance
         self.ldg_safety_factor = 1.1
 
     def _weight_adjusted_speed(self, base_speed, weight):
@@ -23,8 +26,16 @@ class LandingModel:
         """Landing distance increases ~7% per 1,000 ft elevation."""
         return 1 + 0.07 * (alt_ft / 1000.0)
 
-    def calc_landing(self, weight, alt_ft, flap_setting, runway_length=10000,
-                     runway_condition="DRY", headwind=0, tailwind=0):
+    def calc_landing(
+        self,
+        weight,
+        alt_ft,
+        flap_setting,
+        runway_length=10000,
+        runway_condition="DRY",
+        headwind=0,
+        tailwind=0,
+    ):
         flap = flap_setting.upper()
         if flap not in self.Vref_base:
             raise ValueError(f"Invalid flap setting {flap}. Must be UP, MAN, or FULL.")
@@ -58,9 +69,9 @@ class LandingModel:
 
         go_around = {
             "Speed": 200,
-            "ROC": oei_grad * (200 / 60),  # convert ft/nm gradient to fpm approx
+            "VS": oei_grad * (200 / 60),  # ft/min
             "ThrustMode": "MIL",
-            "OEIGradient": oei_grad
+            "OEIGradient": oei_grad,
         }
 
         warnings = []
@@ -80,5 +91,5 @@ class LandingModel:
             "Headwind": headwind,
             "Tailwind": tailwind,
             "GoAround": go_around,
-            "Warnings": warnings
+            "Warnings": warnings,
         }
