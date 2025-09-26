@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 from src.utils.data_loaders import resolve_data_path
 
-class F110Engine:
+class EngineModel:
     def __init__(self, csv_file="f110_tff_model.csv"):
         self.df = pd.read_csv(resolve_data_path(csv_file))
 
@@ -73,4 +73,5 @@ class F110Engine:
             "RPM": rpm,
             "FuelFlow": ff,
         }
+
 
