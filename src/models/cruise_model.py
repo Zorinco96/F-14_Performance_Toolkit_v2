@@ -1,77 +1,76 @@
-# ============================================================
-# F-14 Performance Calculator for DCS World — Cruise Model
-# File: cruise_model.py
-# Version: v1.2.0-overhaul1 (2025-09-21)
-# ============================================================
-from __future__ import annotations
-import os, pandas as pd
-from typing import Dict, Any
+# Cruise Model for F-14 Performance Toolkit (Refined)
+# Computes cruise profiles using NATOPS-derived data with interpolation.
+# Supports Economy, Interceptor, Best Range, Best Endurance, and Shortest Time profiles.
 
-CSV_PATH = "data/f14_cruise_natops.csv"
+import numpy as np
+import pandas as pd
+from src.utils.data_loaders import resolve_data_path, load_is_csv
 
-def plan_cruise(inputs: Dict[str, Any]) -> Dict[str, Any]:
-    """Plan cruise performance based on NATOPS data (if present) or fallback.
-    Inputs:
-      gw_lbs: gross weight
-      drag_index: int
-      mode: 'economy' or 'interceptor'
-      altitude_ft: user altitude (if provided)
-      auto_opt: bool, choose optimum altitude if True
-    """
-    gw = float(inputs.get("gw_lbs", 60000))
-    di = int(inputs.get("drag_index", 0))
-    mode = str(inputs.get("mode", "economy")).lower()
-    alt_ft = inputs.get("altitude_ft")
-    auto_opt = bool(inputs.get("auto_opt", False))
 
-    data = None
-    if os.path.exists(CSV_PATH):
-        try:
-            data = pd.read_csv(CSV_PATH)
-        except Exception:
-            data = None
+class CruiseModel:
+    def __init__(self):
+        self.data = self._load_natops_data()
 
-    results = {}
-    if data is not None and not data.empty:
-        # Simplified filter: nearest weight and DI
-        df = data.copy()
-        df["gross_weight_lbs"] = pd.to_numeric(df["gross_weight_lbs"], errors="coerce")
-        df["drag_index"] = pd.to_numeric(df["drag_index"], errors="coerce")
-        subset = df[(df["drag_index"]==di)]
-        if subset.empty:
-            subset = df
-        # nearest weight row
-        wdiff = (subset["gross_weight_lbs"] - gw).abs()
-        if not wdiff.empty:
-            row = subset.iloc[wdiff.idxmin()]
-            opt_alt = row.get("optimum_alt_ft", 30000)
-            mach = row.get("optimum_mach", 0.75)
+    def _load_natops_data(self):
+        """Load NATOPS cruise data if available, otherwise fallback."""
+        csv_path = resolve_data_path("f14_cruise_natops.csv")
+        df = load_is_csv(csv_path)
+        if df is not None and not df.empty:
+            return df
         else:
-            opt_alt, mach = 30000, 0.75
-        if auto_opt:
-            alt_ft = opt_alt
-        results = {
-            "opt_alt_ft": int(round(alt_ft or opt_alt)),
-            "mach": float(mach),
-            "ias_kts": 300 if mode=="economy" else 320,
-            "tas_kts": 480 if mode=="economy" else 550,
-            "rpm_pct": 85 if mode=="economy" else 95,
-            "ff_pph_per_engine": 5000 if mode=="economy" else 7000,
-            "ff_total": (5000 if mode=="economy" else 7000)*2,
-            "spec_range": 0.12 if mode=="economy" else 0.08,
-            "_debug": {"source":"NATOPS CSV","row":row.to_dict()}
+            # Fallback dataset if CSV not found (simplified approximate values)
+            return pd.DataFrame({
+                "Altitude_ft": [20000, 25000, 30000, 35000],
+                "Economy_Mach": [0.72, 0.75, 0.78, 0.80],
+                "Interceptor_Mach": [0.85, 0.90, 0.95, 1.00],
+                "BestRange_Mach": [0.76, 0.78, 0.80, 0.82],
+                "BestEndurance_Mach": [0.70, 0.72, 0.74, 0.76],
+                "ShortestTime_Mach": [0.90, 0.95, 1.00, 1.05],
+                "FuelFlow_lbhr_per_engine": [7500, 7000, 6800, 6600],
+                "TAS_kts": [420, 450, 480, 510],
+            })
+
+    def _interpolate(self, alt_ft, col):
+        """Linearly interpolate between available altitudes."""
+        df = self.data
+        if alt_ft <= df["Altitude_ft"].min():
+            return df[col].iloc[0]
+        if alt_ft >= df["Altitude_ft"].max():
+            return df[col].iloc[-1]
+        return np.interp(alt_ft, df["Altitude_ft"], df[col])
+
+    def compute_profile(self, alt_ft, profile="economy"):
+        """Compute cruise metrics at a given altitude and profile."""
+        profile = profile.lower()
+        valid_profiles = {
+            "economy": "Economy_Mach",
+            "interceptor": "Interceptor_Mach",
+            "bestrange": "BestRange_Mach",
+            "bestendurance": "BestEndurance_Mach",
+            "shortesttime": "ShortestTime_Mach",
         }
-    else:
-        # Fallback stub
-        results = {
-            "opt_alt_ft": int(round(alt_ft or 30000)),
-            "mach": 0.75 if mode=="economy" else 0.90,
-            "ias_kts": 290 if mode=="economy" else 320,
-            "tas_kts": 470 if mode=="economy" else 550,
-            "rpm_pct": 83 if mode=="economy" else 97,
-            "ff_pph_per_engine": 5200 if mode=="economy" else 7500,
-            "ff_total": (5200 if mode=="economy" else 7500)*2,
-            "spec_range": 0.11 if mode=="economy" else 0.07,
-            "_debug": {"source":"fallback"}
+        if profile not in valid_profiles:
+            raise ValueError(f"Invalid profile {profile}. Choose from {list(valid_profiles.keys())}")
+
+        # Interpolated Mach
+        mach = self._interpolate(alt_ft, valid_profiles[profile])
+        # Interpolated TAS
+        tas = self._interpolate(alt_ft, "TAS_kts")
+        # Interpolated fuel flow
+        ff_per_engine = self._interpolate(alt_ft, "FuelFlow_lbhr_per_engine")
+        ff_total = ff_per_engine * 2
+
+        # Estimate endurance and range (simplified)
+        endurance_hr = 10000 / ff_total  # for 10,000 lb fuel
+        range_nm = tas * endurance_hr
+
+        return {
+            "Altitude_ft": alt_ft,
+            "Profile": profile.capitalize(),
+            "Mach": round(mach, 3),
+            "TAS_kts": round(tas, 1),
+            "FuelFlow_lbhr_per_engine": int(ff_per_engine),
+            "FuelFlow_lbhr_total": int(ff_total),
+            "Endurance_hr": round(endurance_hr, 2),
+            "Range_nm": int(range_nm),
         }
-    return results
