@@ -1,8 +1,7 @@
-# engine_f110.py — v1.2
-# Corrected thrust scaling: use T_MIL_lbf from CSV with Mach falloff law, AB ratio applied.
-
 import pandas as pd
-from data_loaders import resolve_data_path
+import sys
+import os 
+from src.utils.data_loaders import resolve_data_path
 
 class F110Deck:
     def __init__(self, csv_file: str = "f110_tff_model.csv"):
