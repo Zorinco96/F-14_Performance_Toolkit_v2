@@ -1,90 +1,77 @@
-import pandas as pd
-import numpy as np
+# ============================================================
+# F-14 Performance Calculator for DCS World — Cruise Model
+# File: cruise_model.py
+# Version: v1.2.0-overhaul1 (2025-09-21)
+# ============================================================
+from __future__ import annotations
+import os, pandas as pd
+from typing import Dict, Any
 
-class CruiseModel:
+CSV_PATH = "data/f14_cruise_natops.csv"
+
+def plan_cruise(inputs: Dict[str, Any]) -> Dict[str, Any]:
+    """Plan cruise performance based on NATOPS data (if present) or fallback.
+    Inputs:
+      gw_lbs: gross weight
+      drag_index: int
+      mode: 'economy' or 'interceptor'
+      altitude_ft: user altitude (if provided)
+      auto_opt: bool, choose optimum altitude if True
     """
-    F-14 Cruise Performance Model.
-    Provides cruise profiles: Best Endurance, Best Range, Optimum Efficiency, Shortest Time.
-    """
+    gw = float(inputs.get("gw_lbs", 60000))
+    di = int(inputs.get("drag_index", 0))
+    mode = str(inputs.get("mode", "economy")).lower()
+    alt_ft = inputs.get("altitude_ft")
+    auto_opt = bool(inputs.get("auto_opt", False))
 
-    def __init__(self):
-        self.cruise_data = pd.read_csv("data/f14_cruise_profiles.csv")
+    data = None
+    if os.path.exists(CSV_PATH):
+        try:
+            data = pd.read_csv(CSV_PATH)
+        except Exception:
+            data = None
 
-    def _interpolate(self, df, weight, alt_ft, mach):
-        """
-        Helper to interpolate cruise performance by weight, altitude, Mach.
-        """
-        w = np.clip(weight, df["weight"].min(), df["weight"].max())
-        alt = np.clip(alt_ft, df["alt_ft"].min(), df["alt_ft"].max())
-        m = np.clip(mach, df["mach"].min(), df["mach"].max())
-
-        subset = df[(df["weight"] == w) & (df["alt_ft"] == alt)]
-        return np.interp(m, subset["mach"], subset.iloc[:, -1])
-
-    def calculate_cruise(self, weight, alt_ft, mach):
-        """
-        Calculate cruise profiles for different optimization strategies.
-        """
-        profiles = {}
-
-        # Best Endurance
-        endurance_speed = 250  # KCAS placeholder
-        endurance_ff = 6000    # pph/engine placeholder
-        endurance_time = 2.5   # hr endurance at this setting
-        profiles["best_endurance"] = {
-            "speed_kcas": endurance_speed,
-            "mach": 0.55,
-            "fuel_flow_pph_per_engine": endurance_ff,
-            "endurance_hr": endurance_time,
-            "range_nm": endurance_time * endurance_speed
+    results = {}
+    if data is not None and not data.empty:
+        # Simplified filter: nearest weight and DI
+        df = data.copy()
+        df["gross_weight_lbs"] = pd.to_numeric(df["gross_weight_lbs"], errors="coerce")
+        df["drag_index"] = pd.to_numeric(df["drag_index"], errors="coerce")
+        subset = df[(df["drag_index"]==di)]
+        if subset.empty:
+            subset = df
+        # nearest weight row
+        wdiff = (subset["gross_weight_lbs"] - gw).abs()
+        if not wdiff.empty:
+            row = subset.iloc[wdiff.idxmin()]
+            opt_alt = row.get("optimum_alt_ft", 30000)
+            mach = row.get("optimum_mach", 0.75)
+        else:
+            opt_alt, mach = 30000, 0.75
+        if auto_opt:
+            alt_ft = opt_alt
+        results = {
+            "opt_alt_ft": int(round(alt_ft or opt_alt)),
+            "mach": float(mach),
+            "ias_kts": 300 if mode=="economy" else 320,
+            "tas_kts": 480 if mode=="economy" else 550,
+            "rpm_pct": 85 if mode=="economy" else 95,
+            "ff_pph_per_engine": 5000 if mode=="economy" else 7000,
+            "ff_total": (5000 if mode=="economy" else 7000)*2,
+            "spec_range": 0.12 if mode=="economy" else 0.08,
+            "_debug": {"source":"NATOPS CSV","row":row.to_dict()}
         }
-
-        # Best Range
-        range_speed = 350
-        range_ff = 6500
-        range_time = 2.0
-        profiles["best_range"] = {
-            "speed_kcas": range_speed,
-            "mach": 0.8,
-            "fuel_flow_pph_per_engine": range_ff,
-            "endurance_hr": range_time,
-            "range_nm": range_time * range_speed
+    else:
+        # Fallback stub
+        results = {
+            "opt_alt_ft": int(round(alt_ft or 30000)),
+            "mach": 0.75 if mode=="economy" else 0.90,
+            "ias_kts": 290 if mode=="economy" else 320,
+            "tas_kts": 470 if mode=="economy" else 550,
+            "rpm_pct": 83 if mode=="economy" else 97,
+            "ff_pph_per_engine": 5200 if mode=="economy" else 7500,
+            "ff_total": (5200 if mode=="economy" else 7500)*2,
+            "spec_range": 0.11 if mode=="economy" else 0.07,
+            "_debug": {"source":"fallback"}
         }
-
-        # Optimum Efficiency
-        opt_speed = 300
-        opt_ff = 6200
-        opt_time = 2.2
-        profiles["optimum_efficiency"] = {
-            "speed_kcas": opt_speed,
-            "mach": 0.7,
-            "fuel_flow_pph_per_engine": opt_ff,
-            "endurance_hr": opt_time,
-            "range_nm": opt_time * opt_speed
-        }
-
-        # Shortest Time
-        fast_speed = 450
-        fast_ff = 9000
-        fast_time = 1.5
-        profiles["shortest_time"] = {
-            "speed_kcas": fast_speed,
-            "mach": 0.95,
-            "fuel_flow_pph_per_engine": fast_ff,
-            "endurance_hr": fast_time,
-            "range_nm": fast_time * fast_speed
-        }
-
-        # Standard waypoint evaluation (200 nm)
-        waypoint_nm = 200
-        for key, prof in profiles.items():
-            hours = waypoint_nm / prof["speed_kcas"]
-            prof["fuel_used_lb"] = prof["fuel_flow_pph_per_engine"] * 2 * hours
-            prof["fob_at_wp_lb"] = weight - prof["fuel_used_lb"]
-
-        return {
-            "weight": weight,
-            "alt_ft": alt_ft,
-            "mach": mach,
-            "profiles": profiles
-        }
+    return results
