@@ -1,91 +1,55 @@
-"""
-Refined Aerodynamic Model for F-14 Tomcat
-Aligned with expanded NATOPS-style aero dataset (f14_aero.csv)
-
-Enhancements:
-- Auto-sweep scheduling (if auto=True)
-- Effective wing area scaling with sweep angle
-- Stall speed & best glide speed helper functions
-"""
-
 import pandas as pd
 import numpy as np
-from src.data_loaders import resolve_data_path
 
 class F14Aero:
-    def __init__(self, csv_file="data/f14_aero.csv"):
-        self.csv_file = resolve_data_path(csv_file)
-        self.df = pd.read_csv(self.csv_file)
+    """
+    Aerodynamic model for the F-14.
+    Loads NATOPS-based polar data from f14_aero.csv and provides lookups.
+    """
 
-        # Normalize column names
-        self.df.columns = [c.lower() for c in self.df.columns]
+    def __init__(self, csv_path: str):
+        self.data = pd.read_csv(csv_path)
+        self._validate()
 
-        # Validate columns
-        required = {"config", "sweep", "mach", "clmax", "cd0", "k"}
-        if not required.issubset(set(self.df.columns)):
-            raise ValueError(f"Aero CSV missing required columns: {required - set(self.df.columns)}")
+    def _validate(self):
+        required_cols = ["config", "sweep", "mach", "clmax", "cd0", "k", "stall_aoa_deg", "l_d_max"]
+        for col in required_cols:
+            if col not in self.data.columns:
+                raise ValueError(f"Missing required column in f14_aero.csv: {col}")
 
-        # Reference wing area (ft², unswept)
-        self.wing_area_ref = 565.0
-
-    def _nearest_config(self, config: str):
-        """Filter dataset for given config (default CLEAN if not found)."""
-        config = config.upper()
-        if config not in self.df["config"].unique():
-            config = "CLEAN"
-        return self.df[self.df["config"] == config]
-
-    def _auto_sweep(self, mach: float) -> float:
-        """Approximate NATOPS auto-sweep schedule (deg)."""
-        if mach < 0.6:
-            return 20
-        elif mach < 0.9:
-            return 35
-        elif mach < 1.2:
-            return 55
-        else:
-            return 68
-
-    def polar(self, config: str, sweep: float = 20, mach: float = 0.2, auto: bool = False):
+    def polar(self, config: str, mach: float, auto: bool = True):
         """
-        Return aerodynamic coefficients for given config, sweep, and Mach.
-        Performs nearest-match sweep and interpolates across Mach levels.
+        Returns aerodynamic polar parameters for given configuration and Mach.
+        Interpolates between data points if necessary.
+
+        Args:
+            config: "CLEAN", "MANEUVER", or "FULL"
+            mach: Mach number (0.2–2.0)
+            auto: if True, interpolate smoothly, else pick nearest row
+
+        Returns:
+            dict with clmax, cd0, k, stall_aoa_deg, l_d_max
         """
+        df = self.data[self.data["config"].str.upper() == config.upper()]
+        if df.empty:
+            raise ValueError(f"No aerodynamic data found for config {config}")
+
         if auto:
-            sweep = self._auto_sweep(mach)
+            clmax = np.interp(mach, df["mach"], df["clmax"])
+            cd0 = np.interp(mach, df["mach"], df["cd0"])
+            k = np.interp(mach, df["mach"], df["k"])
+            stall_aoa = np.interp(mach, df["mach"], df["stall_aoa_deg"])
+            l_d = np.interp(mach, df["mach"], df["l_d_max"])
+        else:
+            row = df.iloc[(df["mach"] - mach).abs().argsort().iloc[0]]
+            clmax, cd0, k, stall_aoa, l_d = row[["clmax", "cd0", "k", "stall_aoa_deg", "l_d_max"]]
 
-        sub_df = self._nearest_config(config)
-
-        # Nearest sweep available
-        sweeps = np.array(sub_df["sweep"].unique())
-        nearest_sweep = sweeps[np.abs(sweeps - sweep).argmin()]
-        sub_df = sub_df[sub_df["sweep"] == nearest_sweep]
-
-        # Interpolate in Mach space
-        mach_values = sub_df["mach"].values
-        result = {}
-        for col in ["clmax", "cd0", "k", "stall_aoa_deg", "l_d_max"]:
-            result[col] = float(np.interp(mach, mach_values, sub_df[col].values))
-
-        # Scale wing area with sweep
-        sweep_rad = np.radians(nearest_sweep)
-        result["wing_area_eff"] = self.wing_area_ref * np.cos(sweep_rad)
-
-        return result
-
-    def stall_speed(self, weight: float, rho: float, config: str, sweep: float = 20, mach: float = 0.2, auto: bool = False):
-        """Compute stall speed (ft/s) for given weight & density."""
-        polar = self.polar(config, sweep, mach, auto=auto)
-        CLmax = polar["clmax"]
-        S = polar["wing_area_eff"]
-        Vstall = np.sqrt((2 * weight) / (rho * S * CLmax))
-        return Vstall
-
-    def best_glide_speed(self, weight: float, rho: float, config: str, sweep: float = 20, mach: float = 0.6, auto: bool = False):
-        """Compute best glide speed (ft/s) from L/Dmax."""
-        polar = self.polar(config, sweep, mach, auto=auto)
-        # Approximate best glide CL ~ sqrt(CD0/k)
-        CL_best = np.sqrt(polar["cd0"] / polar["k"])
-        S = polar["wing_area_eff"]
-        V_best = np.sqrt((2 * weight) / (rho * S * CL_best))
-        return V_best
+        return {
+            "config": config.upper(),
+            "mach": mach,
+            "clmax": round(clmax, 3),
+            "cd0": round(cd0, 5),
+            "k": round(k, 5),
+            "stall_aoa_deg": round(stall_aoa, 1),
+            "l_d_max": round(l_d, 1)
+        }
