@@ -4,7 +4,7 @@
 
 import numpy as np
 import pandas as pd
-from data_loaders import resolve_data_path
+from src.utils.data_loaders import resolve_data_path
 
 class F110Engine:
     def __init__(self, csv_file="f110_tff_model.csv"):
@@ -73,3 +73,4 @@ class F110Engine:
             "RPM": rpm,
             "FuelFlow": ff,
         }
+
