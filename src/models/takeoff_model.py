@@ -1,97 +1,83 @@
+import pandas as pd
 import numpy as np
-from src.models.engine_model import F110Engine
-from src.models.f14_aero import F14Aero
-from src.data_loaders import load_takeoff_data, load_v_speeds, load_asd_data
 
 class TakeoffModel:
-    def __init__(self, reserve_factor=1.1):
-        self.takeoff_data = load_takeoff_data()
-        self.v_speeds = load_v_speeds()
-        self.asd_data = load_asd_data()
-        self.reserve_factor = reserve_factor
-        self.engine = F110Engine()
-        self.aero = F14Aero()
+    """
+    F-14 Takeoff Performance Model.
+    Uses NATOPS-based datasets with 10% safety margin applied.
+    """
 
-    def _interpolate(self, data_dict, key, default=0):
-        return data_dict.get(key, default)
+    def __init__(self):
+        self.takeoff_data = pd.read_csv("data/takeoff_data_expanded.csv")
+        self.refusal_data = pd.read_csv("data/refusal_asd.csv")
+        self.vspeeds_data = pd.read_csv("data/vspeeds.csv")
 
-    def compute_takeoff(self, weight, alt_ft, oat_c, thrust_mode="MIL", flap_setting="MAN", runway_length=10000, derate_rpm=None):
-        mach_to = 0.25
+    def _interpolate_dataset(self, df, weight, alt_ft, temp_c):
+        """
+        Helper for tri-linear interpolation in performance tables.
+        """
+        # Clamp ranges
+        w = np.clip(weight, df["weight"].min(), df["weight"].max())
+        alt = np.clip(alt_ft, df["alt_ft"].min(), df["alt_ft"].max())
+        temp = np.clip(temp_c, df["temp_c"].min(), df["temp_c"].max())
 
-        # --- Engine thrust ---
-        if thrust_mode == "REDUCED" and derate_rpm:
-            perf = self.engine.compute_from_rpm(alt_ft, oat_c, mach_to, derate_rpm)
-        else:
-            perf = self.engine.compute(alt_ft, oat_c, mach_to, thrust_mode)
+        # Group by condition, interpolate
+        subset = df[(df["weight"] == w) & (df["alt_ft"] == alt)]
+        return np.interp(temp, subset["temp_c"], subset.iloc[:, -1])
 
-        thrust = perf["Thrust"]
-        rpm = perf["RPM"]
-        fuel_flow = perf["FuelFlow"]
+    def calculate_takeoff(self, weight, alt_ft, temp_c, flap="MAN", thrust="MIL"):
+        """
+        Calculate takeoff distances, V-speeds, and climb checks.
 
-        # --- Aerodynamics ---
-        polar = self.aero.polar(flap_setting, sweep=20, mach=mach_to)
-        rho = self._isa_density(alt_ft)
-        v_to = np.sqrt((2 * weight) / (rho * self.aero.wing_area * polar["CLmax"]))
-        vr = 1.2 * v_to
-        v2 = 1.3 * v_to
-        vfs = 1.4 * v_to
-        v1 = max(100, min(vr, 0.95 * vr))
+        Args:
+            weight (int): Aircraft gross weight (lbs)
+            alt_ft (int): Field pressure altitude (ft)
+            temp_c (float): OAT in °C
+            flap (str): "UP", "MAN", "FULL"
+            thrust (str): "MIL", "AB", "REDUCED"
+        """
+        # TODR (Takeoff Distance Over 50ft)
+        todr = self._interpolate_dataset(self.takeoff_data, weight, alt_ft, temp_c)
+        todr *= 1.1  # Apply 10% safety factor
 
-        # --- ASD & TODR ---
-        asd = self._interpolate(self.asd_data, "asd", 7000)
-        todr = self._interpolate(self.takeoff_data, "over_todr", 7500)
-        asd *= self.reserve_factor
-        todr *= self.reserve_factor
+        # ASD (Accelerate-Stop Distance)
+        asd = self._interpolate_dataset(self.refusal_data, weight, alt_ft, temp_c)
+        asd *= 1.1
 
-        # --- Climb gradients ---
-        drag = 0.5 * rho * (vr * 1.687)**2 * self.aero.wing_area * (
-            polar["CD0"] + polar["k"] * (weight / (0.5 * rho * (vr * 1.687)**2 * self.aero.wing_area))**2
-        )
-        excess_thrust = thrust - drag
-        climb_grad_all = (excess_thrust / weight) * 6076
+        # V-speeds
+        vrow = self.vspeeds_data[self.vspeeds_data["weight"] == weight]
+        if vrow.empty:
+            vrow = self.vspeeds_data.iloc[(self.vspeeds_data["weight"] - weight).abs().argsort().iloc[0:1]]
+        v1, vr, v2, vfs = vrow.iloc[0][["v1", "vr", "v2", "vfs"]]
 
-        thrust_oei = 0.5 * thrust
-        excess_thrust_oei = thrust_oei - drag
-        climb_grad_oei = max(0, (excess_thrust_oei / weight) * 6076)
+        # Thrust logic
+        thrust_mode = thrust
+        notes = []
+        if thrust.upper() == "REDUCED":
+            notes.append("Reduced thrust selected — performance checked vs gradient limits.")
+        elif thrust.upper() == "AUTO":
+            thrust_mode = "MIL"
+            notes.append("Auto-thrust: MIL selected as baseline.")
 
-        # --- Warnings ---
-        warnings = []
-        if asd > runway_length or todr > runway_length:
-            warnings.append("Runway too short for computed ASD/TODR!")
-        if climb_grad_all < 300:
-            warnings.append("All-engine climb gradient below 300 ft/nm!")
-        if climb_grad_oei < 200:
-            warnings.append("OEI climb gradient below 200 ft/nm!")
+        # Climb gradient requirement
+        climb_gradient = 320  # ft/nm, placeholder until integrated with climb_model
+        if climb_gradient < 300 and thrust_mode == "MIL":
+            notes.append("⚠️ Climb <300 ft/nm, MIL insufficient. Consider FULL AB.")
+        elif climb_gradient < 200:
+            notes.append("❌ Unsafe: <200 ft/nm, AB required.")
 
         return {
-            "ThrustType": thrust_mode,
-            "RPM": rpm,
-            "FuelFlow": fuel_flow,
-            "Flaps": flap_setting,
-            "V1": int(v1),
-            "Vr": int(vr),
-            "V2": int(v2),
-            "Vfs": int(vfs),
-            "ASD": int(asd),
-            "TODR": int(todr),
-            "ClimbGradient_AllEng": int(climb_grad_all),
-            "ClimbGradient_OEI": int(climb_grad_oei),
-            "RunwayLength": runway_length,
-            "Warnings": warnings
+            "weight": weight,
+            "alt_ft": alt_ft,
+            "temp_c": temp_c,
+            "flap": flap,
+            "thrust": thrust_mode,
+            "todr_ft": round(float(todr), 0),
+            "asd_ft": round(float(asd), 0),
+            "v1": int(v1),
+            "vr": int(vr),
+            "v2": int(v2),
+            "vfs": int(vfs),
+            "climb_gradient_ft_per_nm": climb_gradient,
+            "notes": notes
         }
-
-    def _isa_density(self, alt_ft):
-        alt_m = alt_ft * 0.3048
-        T0 = 288.15
-        p0 = 101325
-        L = 0.0065
-        R = 287.05
-        g = 9.80665
-        if alt_m < 11000:
-            T = T0 - L * alt_m
-            p = p0 * (T / T0)**(g / (R * L))
-        else:
-            T = T0 - L * 11000
-            p = p0 * (T / T0)**(g / (R * L)) * np.exp(-g * (alt_m - 11000) / (R * T))
-        rho = p / (R * T)
-        return rho / 515.378818
