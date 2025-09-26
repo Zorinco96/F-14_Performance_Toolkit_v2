@@ -1,84 +1,60 @@
-# Landing Model for F-14 Performance Toolkit (Enhanced)
-# Computes landing performance with flap-specific V-speeds, 
-# pressure altitude corrections, wet/contaminated runway factors, 
-# and OEI go-around integration with climb_model.
-
+import pandas as pd
 import numpy as np
-from src.models.climb_model import ClimbModel
 
 class LandingModel:
+    """
+    F-14 Landing Performance Model.
+    Uses NATOPS-based datasets with safety factors applied.
+    """
+
     def __init__(self):
-        # NATOPS baseline V-speeds (approx values at 54,000 lbs)
-        self.Vref_base = {"UP": 170, "MAN": 150, "FULL": 140}
-        self.Vac_base = {"UP": 150, "MAN": 135, "FULL": 120}
-        self.Vfs_base = {"UP": 160, "MAN": 145, "FULL": 135}
-        self.base_weight = 54000  # lbs reference
+        self.landing_data = pd.read_csv("data/f14_landing_natops_full.csv")
 
-        self.ldg_safety_factor = 1.1
+    def _interpolate_dataset(self, df, weight, alt_ft, temp_c):
+        """
+        Helper for tri-linear interpolation in landing tables.
+        """
+        w = np.clip(weight, df["weight"].min(), df["weight"].max())
+        alt = np.clip(alt_ft, df["alt_ft"].min(), df["alt_ft"].max())
+        temp = np.clip(temp_c, df["temp_c"].min(), df["temp_c"].max())
 
-    def _weight_adjusted_speed(self, base_speed, weight):
-        return base_speed * np.sqrt(weight / self.base_weight)
+        subset = df[(df["weight"] == w) & (df["alt_ft"] == alt)]
+        return np.interp(temp, subset["temp_c"], subset.iloc[:, -1])
 
-    def _altitude_correction(self, alt_ft):
-        """Landing distance increases ~7% per 1,000 ft elevation."""
-        return 1 + 0.07 * (alt_ft / 1000.0)
+    def calculate_landing(self, weight, alt_ft, temp_c, flap="FULL"):
+        """
+        Calculate landing distance and speeds.
 
-    def calc_landing(self, weight, alt_ft, flap_setting, runway_length=10000,
-                     runway_condition="DRY", headwind=0, tailwind=0):
-        flap = flap_setting.upper()
-        if flap not in self.Vref_base:
-            raise ValueError(f"Invalid flap setting {flap}. Must be UP, MAN, or FULL.")
+        Args:
+            weight (int): Landing weight (lbs)
+            alt_ft (int): Field pressure altitude (ft)
+            temp_c (float): OAT (°C)
+            flap (str): "FULL" (default) or "MAN"
+        """
+        # Base landing distance
+        ldr = self._interpolate_dataset(self.landing_data, weight, alt_ft, temp_c)
+        ldr *= 1.1  # Apply 10% safety margin
 
-        # Adjust speeds for weight and flap
-        Vref = self._weight_adjusted_speed(self.Vref_base[flap], weight)
-        Vac = self._weight_adjusted_speed(self.Vac_base[flap], weight)
-        Vfs = self._weight_adjusted_speed(self.Vfs_base[flap], weight)
+        # Speeds (simplified for NATOPS — could expand by config)
+        vref = 130 + (weight - 50000) / 1000 * 2  # approx NATOPS scaling
+        vfs = vref + 20
+        vac = vref + 10
 
-        # Baseline landing distance scaling with weight
-        ldr = 8000 * (weight / self.base_weight)
-
-        # Apply safety factor and altitude correction
-        ldr *= self.ldg_safety_factor
-        ldr *= self._altitude_correction(alt_ft)
-
-        # Adjust for runway surface
-        if runway_condition.upper() == "WET":
-            ldr *= 1.15
-        elif runway_condition.upper() == "CONTAMINATED":
-            ldr *= 1.3
-
-        # Adjust for wind
-        ldr *= (1 - 0.05 * (headwind / 10.0))
-        ldr *= (1 + 0.1 * (tailwind / 10.0))
-
-        # OEI go-around using climb_model
-        climb = ClimbModel()
-        oei_profile = climb.compute_profiles(weight, 15, alt_max=3000)
-        oei_grad = oei_profile[0]["OEIGradient"]
-
-        go_around = {
-            "Speed": 200,
-            "ROC": oei_grad * (200 / 60),  # convert ft/nm gradient to fpm approx
-            "ThrustMode": "MIL",
-            "OEIGradient": oei_grad
-        }
-
-        warnings = []
-        if ldr > runway_length:
-            warnings.append("Landing distance exceeds available runway!")
-        if oei_grad < 200:
-            warnings.append("OEI climb gradient below 200 ft/nm!")
+        # Go-around planning (pattern at ~200 KCAS)
+        go_around_thrust = "MIL"
+        go_around_speed = 200
+        go_around_notes = "Plan for MIL power go-around, pattern speed ~200 KCAS."
 
         return {
-            "Vref": round(Vref, 1),
-            "Vac": round(Vac, 1),
-            "Vfs": round(Vfs, 1),
-            "LandingDistance": int(ldr),
-            "RunwayLength": runway_length,
-            "Flaps": flap,
-            "RunwayCondition": runway_condition.upper(),
-            "Headwind": headwind,
-            "Tailwind": tailwind,
-            "GoAround": go_around,
-            "Warnings": warnings
+            "weight": weight,
+            "alt_ft": alt_ft,
+            "temp_c": temp_c,
+            "flap": flap,
+            "ldr_ft": round(float(ldr), 0),
+            "vref": int(vref),
+            "vfs": int(vfs),
+            "vac": int(vac),
+            "go_around_thrust": go_around_thrust,
+            "go_around_speed_kcas": go_around_speed,
+            "notes": [go_around_notes]
         }
