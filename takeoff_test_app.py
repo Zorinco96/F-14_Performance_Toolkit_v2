@@ -1,5 +1,5 @@
 import streamlit as st
-from src.engines.engine_f110 import EngineF110
+from src/engines/engine_f110 import EngineF110
 from src.models.f14_aero import AeroModel
 from src.models.takeoff_model import TakeoffModel
 
