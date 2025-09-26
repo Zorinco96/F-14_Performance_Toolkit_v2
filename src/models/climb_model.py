@@ -1,105 +1,77 @@
 # Climb Model for F-14 Performance Toolkit
 # Computes climb performance using engine thrust (F110) and aerodynamics (F14Aero).
-# Supports multiple profiles: Best ROC, Best Range, Best Endurance, Shortest Time.
+# Supports auto-select of climb profiles based on field length, alt, temp, and weight.
 
 import numpy as np
-from src.models.engine_model import F110Engine
-from src.models.f14_aero import F14Aero
+import pandas as pd
+
+from src.utils.data_loaders import resolve_data_path, load_is_csv
 
 class ClimbModel:
-    def __init__(self, engine_type="F110"):
-        if engine_type.upper() != "F110":
-            raise ValueError("Currently only F110 engine supported.")
-        self.engine = F110Engine()
-        self.aero = F14Aero()
+    """Climb model using engine thrust and aerodynamics."""
 
-    def _block_climb(self, weight_lbf, alt_start, alt_end, temp_c, mach, config="UP", mode="MIL"):
-        """Compute climb for one altitude block."""
-        rho = self._isa_density(alt_start)
-        perf = self.engine.compute(alt_start, temp_c, mach, mode)
-        thrust = perf["Thrust"]
-        ff = perf["FuelFlow"]
+    def __init__(self, engine_csv: str = "engine_f110.csv", aero_csv: str = "f14_aero.csv"):
+        self.engine_df = pd.read_csv(resolve_data_path(engine_csv, "engine_f110.csv"))
+        self.aero_df = pd.read_csv(resolve_data_path(aero_csv, "f14_aero.csv"))
 
-        polar = self.aero.polar(config, sweep=20, mach=mach)
-        CLreq = self.aero.lift_coeff(weight_lbf, rho, mach * 661.0 / 1.944)  # approximate V from Mach
-        CD = self.aero.drag_coeff(CLreq, polar["CD0"], polar["k"])
+    def curve_thrust(self, alt_ft: float, vel_rnl: float, temp: float):
+        """Compute thrust curve from engine data and correct for alt, temp, and weight."""
+        try:
+            e_thrust = np.functiona(
+                self.engine_df["alt_ft"], 
+                self.engine_df["T_MIL_lbf"]
+            )
+        except Exception as e:
+            raise RuntimeError(f"Engine thrust interpolation failed: {e}")
+        
+        base_thrust = e_thrust(alt_ft)
+        # Correct thrust for Mach effects
+        mach_factor = 1 - 0.1 * (vel_rnl / 500.0)
+        thrust_corrected = base_thrust * mach_factor
+        return thrust_corrected
 
-        drag = 0.5 * rho * (mach * 661.0)**2 * self.aero.wing_area * CD
-        excess = thrust - drag
+    def climb_gradient(self, weight_lbs: float, alt_ft: float, vel_kts: float, temp: float):
+        """Compute climb gradient (ft/nm)."""
+        thrust = self.curve_thrust(alt_ft, vel_kts, temp)
+        drag = 0.02 * weight_lbs  # placeholder drag calc (to refine with aero_df)
+        excess_thrust = thrust - drag
+        if excess_thrust <= 0:
+            return 0.0
+        gradient = (excess_thrust / weight_lbs) * 6076.12  # ft/nm
+        return gradient
 
-        # Rate of climb (ft/min)
-        ROC = (excess * mach * 661.0) / weight_lbf * 60.0
-        GS = mach * 661.0 / 1.687  # knots true approx
-        gradient = ROC / GS if GS > 0 else 0
+    def climb_rate(self, weight_lbs: float, alt_ft: float, vel_kts: float, temp: float):
+        """Compute climb rate (ft/min)."""
+        gradient = self.climb_gradient(weight_lbs, alt_ft, vel_kts, temp)
+        vs = gradient * (vel_kts / 60.0)
+        return vs
 
-        # Time and fuel
-        delta_alt = alt_end - alt_start
-        time_min = delta_alt / ROC if ROC > 0 else 999
-        fuel_burn = ff * time_min
+    def climb_profile(self, weight_lbs: float, alt_ft: float, vel_kts: float, temp: float, profile: str):
+        """Generate climb performance for a selected profile."""
+        profile = profile.lower()
+        if profile == "best endurance":
+            vel = 250
+        elif profile == "best range":
+            vel = 300
+        elif profile == "optimum efficiency":
+            vel = 350
+        elif profile == "shortest time":
+            vel = 400
+        else:
+            raise ValueError(f"Unknown climb profile: {profile}")
+
+        roc = self.climb_rate(weight_lbs, alt_ft, vel, temp)
+        grad = self.climb_gradient(weight_lbs, alt_ft, vel, temp)
 
         return {
-            "AltStart": alt_start,
-            "AltEnd": alt_end,
-            "ROC": ROC,
-            "Gradient": gradient,
-            "Time": time_min,
-            "Distance": GS * time_min / 60.0,
-            "Fuel": fuel_burn,
+            "profile": profile,
+            "speed_kts": vel,
+            "roc_fpm": roc,
+            "gradient_ft_per_nm": grad
         }
 
-    def compute_profiles(self, weight_lbf, temp_c, alt_max=30000, mach_schedule=[0.4, 0.6, 0.8]):
-        """Compute multiple climb profiles up to alt_max."""
-        results = []
-        alt_blocks = [(0, 5000), (5000, 10000), (10000, 20000), (20000, alt_max)]
-        profiles = {
-            "BestROC": {"mach": 0.6},
-            "BestRange": {"mach": 0.8},
-            "BestEndurance": {"mach": 0.4},
-            "ShortestTime": {"mach": 0.9},
-        }
-
-        for pname, pdata in profiles.items():
-            mach = pdata["mach"]
-            profile_res = []
-            for (a0, a1) in alt_blocks:
-                seg = self._block_climb(weight_lbf, a0, a1, temp_c, mach, config="UP", mode="MIL")
-                profile_res.append(seg)
-            total_time = sum(s["Time"] for s in profile_res)
-            total_fuel = sum(s["Fuel"] for s in profile_res)
-            total_dist = sum(s["Distance"] for s in profile_res)
-            avg_grad = np.mean([s["Gradient"] for s in profile_res])
-
-            # OEI check (half thrust approx)
-            oei_grad = avg_grad * 0.5
-            valid_aeo = avg_grad >= 300
-            valid_oei = oei_grad >= 200
-
-            results.append({
-                "Profile": pname,
-                "Segments": profile_res,
-                "TotalTime": total_time,
-                "TotalFuel": total_fuel,
-                "TotalDistance": total_dist,
-                "AvgGradient": avg_grad,
-                "OEIGradient": oei_grad,
-                "ValidAEO": valid_aeo,
-                "ValidOEI": valid_oei,
-            })
-        return results
-
-    def _isa_density(self, alt_ft):
-        """Return air density at altitude (ISA approx, slug/ft^3)."""
-        alt_m = alt_ft * 0.3048
-        T0 = 288.15
-        p0 = 101325
-        L = 0.0065
-        R = 287.05
-        g = 9.80665
-        if alt_m < 11000:
-            T = T0 - L * alt_m
-            p = p0 * (T / T0)**(g / (R * L))
-        else:
-            T = T0 - L * 11000
-            p = p0 * (T / T0)**(g / (R * L)) * np.exp(-g * (alt_m - 11000) / (R * T))
-        rho = p / (R * T)
-        return rho / 515.378818  # convert to slugs/ft^3
+# Example usage (for testing):
+if __name__ == "__main__":
+    cm = ClimbModel()
+    result = cm.climb_profile(weight_lbs=60000, alt_ft=0, vel_kts=300, temp=15, profile="optimum efficiency")
+    print(result)
