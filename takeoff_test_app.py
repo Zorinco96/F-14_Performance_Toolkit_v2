@@ -2,10 +2,11 @@ import streamlit as st
 from src.models.takeoff_model import TakeoffModel
 from src.models.landing_model import LandingModel
 from src.models.cruise_model import CruiseModel
+from src.engines.engine_f110 import F110Deck  # ✅ corrected import
 
 st.title("F-14 Performance Toolkit – Test Harness")
 
-# Takeoff test
+# --- Takeoff Test ---
 st.header("Takeoff Performance Test")
 try:
     to_model = TakeoffModel()
@@ -16,7 +17,7 @@ try:
 except Exception as e:
     st.error(f"Takeoff test failed: {e}")
 
-# Landing test
+# --- Landing Test ---
 st.header("Landing Performance Test")
 try:
     ldg_model = LandingModel()
@@ -27,7 +28,7 @@ try:
 except Exception as e:
     st.error(f"Landing test failed: {e}")
 
-# Cruise test
+# --- Cruise Test ---
 st.header("Cruise Performance Test")
 try:
     crz_model = CruiseModel()
@@ -37,3 +38,14 @@ try:
     st.json(crz_result)
 except Exception as e:
     st.error(f"Cruise test failed: {e}")
+
+# --- Engine Deck Test ---
+st.header("F110 Engine Deck Test")
+try:
+    f110 = F110Deck()
+    thrust = f110.thrust_lbf(alt_ft=0, mach=0.0, power="MIL")
+    st.write(f"F110 MIL thrust at SL, Mach 0: {thrust:.0f} lbf")
+    thrust_ab = f110.thrust_lbf(alt_ft=0, mach=0.0, power="MAX AB")
+    st.write(f"F110 MAX AB thrust at SL, Mach 0: {thrust_ab:.0f} lbf")
+except Exception as e:
+    st.error(f"F110 Engine Deck test failed: {e}")
