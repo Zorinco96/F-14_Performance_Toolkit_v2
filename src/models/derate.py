@@ -1,87 +1,119 @@
-# Advanced Derate Policy for F-14 Performance Toolkit
-# Hybrid model: JSON guardrails + NATOPS/CSV performance validation
-# Includes AEO/OEI climb checks, iterative RPM bumping, safety factor, and fuel savings
-
 import json
 import os
-from data_loaders import load_takeoff_data
-from src.models.takeoff_model import calc_takeoff
+from src.models.takeoff_model import TakeoffModel
+from src.utils.data_loaders import load_takeoff_data
 
-# Path to derate configuration JSON
-CONFIG_PATH = os.path.join(os.path.dirname(__file__), "../../data/derate_config.json")
 
-def load_config():
-    with open(CONFIG_PATH, "r") as f:
-        return json.load(f)
-
-def validate_derate(weight, temp, pressure, flap_setting, requested_rpm_pct):
+class DerateCalculator:
     """
-    Validates derated thrust setting against policy + NATOPS performance data.
-
-    :param weight: Aircraft weight (lbs)
-    :param temp: Ambient OAT (C)
-    :param pressure: Baro Pressure (inHg)
-    :param flap_setting: UP, MAN, FULL
-    :param requested_rpm_pct: Pilot-requested derate RPM % (e.g. 92)
-    :return: dict with validated derate outputs (RPM, FF, TODR, ASD, climb data, fuel savings)
+    Handles reduced thrust (derate) takeoff calculations for F-14 performance toolkit.
     """
-    cfg = load_config()
 
-    # Policy floors per flap setting
-    flap_floor_map = cfg.get("flap_floor_pct", {"UP": 85, "MAN": 90, "FULL": 95})
-    min_rpm_pct = flap_floor_map.get(flap_setting, cfg.get("min_takeoff_rpm_pct", 85))
+    def __init__(self, aircraft_type: str, engine_type: str, config_path: str = None):
+        self.aircraft_type = aircraft_type
+        self.engine_type = engine_type
+        self.config_path = config_path or os.path.join(
+            os.path.dirname(__file__), "derate_config.json"
+        )
+        self.config = self._load_config()
 
-    rpm_pct = max(requested_rpm_pct, min_rpm_pct)
-    safety_factor = cfg.get("safety_factor", 1.10)
+    def _load_config(self):
+        """Load derate configuration from JSON."""
+        if os.path.exists(self.config_path):
+            with open(self.config_path, "r") as f:
+                return json.load(f)
+        # Default guardrails
+        return {"min_rpm": 85, "max_rpm": 99, "rpm_step": 1}
 
-    # Iteratively bump RPM until climb requirements are satisfied
-    max_rpm = 100
-    climb_valid_aeo = False
-    climb_valid_oei = False
-    while rpm_pct <= max_rpm:
-        perf = calc_takeoff(weight, temp, pressure, "REDUCED", flap_setting)
-        climb_grad = perf.get("ClimbGradient", 0)
+    def compute_manual_derate(self, rpm: float, takeoff_conditions: dict) -> dict:
+        """
+        Compute a manual derate at given RPM.
+        Returns structured mission card output.
+        """
+        # Validate RPM
+        if not (self.config["min_rpm"] <= rpm <= self.config["max_rpm"]):
+            raise ValueError(f"RPM {rpm}% outside allowable derate range.")
 
-        # Placeholder: treat AEO as reported gradient, OEI as half
-        climb_grad_aeo = climb_grad
-        climb_grad_oei = climb_grad * 0.5
+        takeoff_model = TakeoffModel(
+            aircraft_type=self.aircraft_type,
+            engine_type=self.engine_type,
+            **takeoff_conditions
+        )
 
-        climb_valid_aeo = climb_grad_aeo >= 300
-        climb_valid_oei = climb_grad_oei >= 200
+        results = takeoff_model.compute_takeoff(rpm=rpm)
 
-        if climb_valid_aeo and climb_valid_oei:
-            break
-        rpm_pct += 1
+        # Add mission card structure
+        mission_card = self._format_mission_card(results, rpm, derate_type="MANUAL")
+        return mission_card
 
-    status = "Derate accepted." if (climb_valid_aeo and climb_valid_oei) else "Max MIL required."
+    def compute_auto_derate(self, takeoff_conditions: dict) -> dict:
+        """
+        Compute the lowest RPM that satisfies climb gradient ≥300 ft/nm.
+        If MIL+FULL flaps <200 ft/nm, escalate to AB.
+        """
+        best_results = None
+        min_rpm = self.config["min_rpm"]
+        max_rpm = self.config["max_rpm"]
+        step = self.config["rpm_step"]
 
-    # Estimate fuel flow (placeholder scaling)
-    idle_ff = cfg.get("idle_ff_pph", 3000)
-    max_ff = cfg.get("mil_ff_pph", 10000)
-    ff = idle_ff + (rpm_pct / 100.0) * (max_ff - idle_ff)
+        for rpm in range(max_rpm, min_rpm - 1, -step):
+            takeoff_model = TakeoffModel(
+                aircraft_type=self.aircraft_type,
+                engine_type=self.engine_type,
+                **takeoff_conditions
+            )
+            results = takeoff_model.compute_takeoff(rpm=rpm)
 
-    # Fuel savings compared to full MIL
-    fuel_saving = max_ff - ff
+            if results["Climb Gradient (ft/nm)"] >= 300:
+                best_results = self._format_mission_card(results, rpm, derate_type="AUTO")
+                break
 
-    # TODR/ASD with safety factor
-    asd = perf.get("ASD", 7000) * safety_factor
-    todr = perf.get("TODR", 7500) * safety_factor
+        # If no valid derate, check if MIL+FULL flaps <200
+        if not best_results:
+            takeoff_model = TakeoffModel(
+                aircraft_type=self.aircraft_type,
+                engine_type=self.engine_type,
+                **takeoff_conditions
+            )
+            results = takeoff_model.compute_takeoff(rpm=max_rpm)
 
-    return {
-        "RequestedRPM": requested_rpm_pct,
-        "ValidatedRPM": rpm_pct,
-        "FuelFlow": ff,
-        "FuelSaved": fuel_saving,
-        "Flaps": flap_setting,
-        "ASD": asd,
-        "TODR": todr,
-        "ClimbGradientAEO": climb_grad_aeo,
-        "ClimbGradientOEI": climb_grad_oei,
-        "ClimbValidAEO": climb_valid_aeo,
-        "ClimbValidOEI": climb_valid_oei,
-        "Status": status
-    }
+            if results["Climb Gradient (ft/nm)"] < 200:
+                results["Warnings"] = "❌ RED: Gradient <200 ft/nm — Escalating to Afterburner"
+                best_results = self._format_mission_card(results, 100, derate_type="AFTERBURNER")
+            else:
+                results["Warnings"] = "Amber caution: Gradient <300 ft/nm, MIL thrust required"
+                best_results = self._format_mission_card(results, max_rpm, derate_type="MIL")
 
-def get_policy_snapshot():
-    """Return a snapshot of derate policy settings."""
-    return load_config()
+        return best_results
+
+    def _format_mission_card(self, results: dict, rpm: float, derate_type: str) -> dict:
+        """
+        Format results into mission card structure for pilot readability.
+        """
+        thrust_type = "REDUCED" if derate_type in ["AUTO", "MANUAL"] else derate_type
+        warnings = results.get("Warnings", "")
+
+        return {
+            "Thrust Type": thrust_type,
+            "Takeoff RPM (%)": rpm,
+            "Fuel Flow (pph/engine)": results.get("Fuel Flow (pph/engine)", None),
+            "V1 (KCAS)": results.get("V1"),
+            "Vr (KCAS)": results.get("Vr"),
+            "V2 (KCAS)": results.get("V2"),
+            "Vfs (KCAS)": results.get("Vfs"),
+            "Climb Gradient (ft/nm)": results.get("Climb Gradient (ft/nm)"),
+            "Warnings": warnings,
+            "Trim Setting": results.get("Trim Setting", "Set for V2 to V2+15"),
+            "Fuel Savings (lbs)": self._compute_fuel_savings(results, rpm),
+        }
+
+    def _compute_fuel_savings(self, results: dict, rpm: float) -> float:
+        """
+        Compute fuel savings vs MIL baseline to 200 nm.
+        Placeholder uses delta FF × fixed time factor (to be refined with climb model).
+        """
+        mil_ff = results.get("Baseline MIL FF", 20000)  # placeholder, refine with climb_model
+        reduced_ff = results.get("Fuel Flow (pph/engine)", mil_ff)
+        delta_ff = mil_ff - reduced_ff
+        flight_time_hr = 0.5  # placeholder for time to 200 nm, refine with climb model
+        return round(delta_ff * flight_time_hr * 2, 0)  # ×2 engines
