@@ -1,107 +1,109 @@
 import pandas as pd
 import numpy as np
 
-
-class F110EngineModel:
+class EngineF110:
     """
-    General Electric F110 Engine Model for the F-14B/D Tomcat.
-
-    Uses NATOPS-derived performance tables to interpolate thrust,
-    RPM, and fuel flow across altitude, Mach, and thrust setting.
+    F110 engine model for F-14B/D Tomcat.
+    Provides thrust (lbf), fuel flow (pph), and RPM (%) across altitude/Mach.
+    Supports MIL, AB, Idle, and reduced derates.
     """
 
-    def __init__(self, dataset: pd.DataFrame):
+    def __init__(self, csv_path="data/f110_tff_model.csv"):
+        # Load dataset
+        self.data = pd.read_csv(csv_path)
+
+        # Expect columns: Altitude_ft, Mach, RPM_pct, Thrust_lbf, FuelFlow_pph
+        required = {"Altitude_ft", "Mach", "RPM_pct", "Thrust_lbf", "FuelFlow_pph"}
+        if not required.issubset(self.data.columns):
+            raise ValueError(f"CSV must include {required}")
+
+        # Unique sorted axes for interpolation
+        self.altitudes = sorted(self.data["Altitude_ft"].unique())
+        self.machs = sorted(self.data["Mach"].unique())
+
+        # Define typical operating points
+        self.idle_rpm = 71.0
+        self.mil_rpm = 99.0
+        self.ab_rpm = 103.0
+
+    def _interpolate(self, altitude_ft, mach, rpm_pct):
         """
-        Initialize the model with a dataset.
-
-        dataset: DataFrame with columns:
-        - ThrustType (IDLE, MIL, AB)
-        - Altitude_ft
-        - Mach
-        - RPM_pct
-        - Thrust_lbf
-        - FuelFlow_pph
+        Bilinear interpolation across altitude + Mach for thrust/fuel flow.
         """
-        self.data = dataset
+        # Find nearest grid points
+        alt_low = max([a for a in self.altitudes if a <= altitude_ft], default=min(self.altitudes))
+        alt_high = min([a for a in self.altitudes if a >= altitude_ft], default=max(self.altitudes))
+        mach_low = max([m for m in self.machs if m <= mach], default=min(self.machs))
+        mach_high = min([m for m in self.machs if m >= mach], default=max(self.machs))
 
-    def _interpolate(self, thrust_type: str, altitude_ft: float, mach: float):
-        """
-        Bilinear interpolation of thrust data across altitude and Mach.
-        Falls back to 1D or direct match if one axis is fixed.
-        """
-        df = self.data[self.data["ThrustType"] == thrust_type]
+        def get_point(alt, m):
+            df = self.data[(self.data["Altitude_ft"] == alt) & (self.data["Mach"] == m)]
+            if df.empty:
+                return None
+            # Interpolate thrust + fuel flow at this RPM
+            thrust = np.interp(rpm_pct, df["RPM_pct"], df["Thrust_lbf"])
+            ff = np.interp(rpm_pct, df["RPM_pct"], df["FuelFlow_pph"])
+            return thrust, ff
 
-        if df.empty:
-            raise ValueError(f"No data available for thrust type {thrust_type}")
+        # Corner values
+        q11 = get_point(alt_low, mach_low)
+        q12 = get_point(alt_low, mach_high)
+        q21 = get_point(alt_high, mach_low)
+        q22 = get_point(alt_high, mach_high)
 
-        # Unique sorted breakpoints
-        machs = np.sort(df["Mach"].unique())
-        alts = np.sort(df["Altitude_ft"].unique())
+        # Fallback if missing
+        if None in [q11, q12, q21, q22]:
+            df = self.data[(self.data["Altitude_ft"] == alt_low) & (self.data["Mach"] == mach_low)]
+            thrust = np.interp(rpm_pct, df["RPM_pct"], df["Thrust_lbf"])
+            ff = np.interp(rpm_pct, df["RPM_pct"], df["FuelFlow_pph"])
+            return thrust, ff
 
-        # Bounds
-        mach_low, mach_high = machs[machs <= mach].max(), machs[machs >= mach].min()
-        alt_low, alt_high = alts[alts <= altitude_ft].max(), alts[alts >= altitude_ft].min()
-
-        # Direct match
-        if mach_low == mach_high and alt_low == alt_high:
-            row = df[(df["Mach"] == mach_low) & (df["Altitude_ft"] == alt_low)].iloc[0]
-            return row["Thrust_lbf"], row["RPM_pct"], row["FuelFlow_pph"]
-
-        # 1D along altitude
-        if mach_low == mach_high:
-            rows = df[df["Mach"] == mach_low]
+        # Bilinear interpolation
+        def bilinear(x, y, q11, q12, q21, q22, x1, x2, y1, y2):
             return (
-                np.interp(altitude_ft, rows["Altitude_ft"], rows["Thrust_lbf"]),
-                np.interp(altitude_ft, rows["Altitude_ft"], rows["RPM_pct"]),
-                np.interp(altitude_ft, rows["Altitude_ft"], rows["FuelFlow_pph"]),
-            )
+                q11 * (x2 - x) * (y2 - y) +
+                q21 * (x - x1) * (y2 - y) +
+                q12 * (x2 - x) * (y - y1) +
+                q22 * (x - x1) * (y - y1)
+            ) / ((x2 - x1) * (y2 - y1))
 
-        # 1D along Mach
-        if alt_low == alt_high:
-            rows = df[df["Altitude_ft"] == alt_low]
-            return (
-                np.interp(mach, rows["Mach"], rows["Thrust_lbf"]),
-                np.interp(mach, rows["Mach"], rows["RPM_pct"]),
-                np.interp(mach, rows["Mach"], rows["FuelFlow_pph"]),
-            )
+        thrust = bilinear(mach, altitude_ft,
+                          q11[0], q12[0], q21[0], q22[0],
+                          mach_low, mach_high, alt_low, alt_high)
+        ff = bilinear(mach, altitude_ft,
+                      q11[1], q12[1], q21[1], q22[1],
+                      mach_low, mach_high, alt_low, alt_high)
+        return thrust, ff
 
-        # 2D bilinear interpolation
-        q11 = df[(df["Mach"] == mach_low) & (df["Altitude_ft"] == alt_low)].iloc[0]
-        q12 = df[(df["Mach"] == mach_low) & (df["Altitude_ft"] == alt_high)].iloc[0]
-        q21 = df[(df["Mach"] == mach_high) & (df["Altitude_ft"] == alt_low)].iloc[0]
-        q22 = df[(df["Mach"] == mach_high) & (df["Altitude_ft"] == alt_high)].iloc[0]
-
-        def bilinear(val11, val12, val21, val22):
-            return (
-                val11 * (alt_high - altitude_ft) * (mach_high - mach)
-                + val21 * (alt_high - altitude_ft) * (mach - mach_low)
-                + val12 * (altitude_ft - alt_low) * (mach_high - mach)
-                + val22 * (altitude_ft - alt_low) * (mach - mach_low)
-            ) / ((alt_high - alt_low) * (mach_high - mach_low))
-
-        thrust = bilinear(q11["Thrust_lbf"], q12["Thrust_lbf"], q21["Thrust_lbf"], q22["Thrust_lbf"])
-        rpm = bilinear(q11["RPM_pct"], q12["RPM_pct"], q21["RPM_pct"], q22["RPM_pct"])
-        ff = bilinear(q11["FuelFlow_pph"], q12["FuelFlow_pph"], q21["FuelFlow_pph"], q22["FuelFlow_pph"])
-        return thrust, rpm, ff
-
-    def compute(self, thrust_type: str, altitude_ft: float, mach: float, derate: float = None):
+    def get_performance(self, altitude_ft, mach, mode="MIL", derate_rpm=None, weight_lbs=None, distance_nm=None):
         """
-        Compute thrust, RPM, and fuel flow for a given condition.
-
-        thrust_type: "IDLE", "MIL", "AB", or "DERATE"
-        altitude_ft: altitude in feet
-        mach: flight Mach number
-        derate: optional RPM percentage for DERATE
+        Returns thrust (lbf), RPM (%), fuel flow (pph).
+        Modes: "IDLE", "MIL", "AB", "DERATE"
         """
-        # Treat DERATE as scaled MIL
-        if thrust_type == "DERATE":
-            thrust, rpm, ff = self._interpolate("MIL", altitude_ft, mach)
-            if derate:
-                thrust *= derate / 99.0  # scale relative to MIL rpm=99%
-                ff *= derate / 99.0
-                rpm = derate
-            return {"Thrust_lbf": round(thrust, 0), "RPM_pct": round(rpm, 1), "FuelFlow_pph": round(ff, 0)}
+        if mode == "IDLE":
+            rpm = self.idle_rpm
+        elif mode == "MIL":
+            rpm = self.mil_rpm
+        elif mode == "AB":
+            rpm = self.ab_rpm
+        elif mode == "DERATE":
+            if derate_rpm is None:
+                raise ValueError("Must supply derate_rpm for DERATE mode.")
+            rpm = max(self.idle_rpm, min(derate_rpm, self.mil_rpm))
+        else:
+            raise ValueError("Mode must be IDLE, MIL, AB, or DERATE")
 
-        # Standard cases
-        thrust, rpm, ff = self._interpolate(thrust_type, altitude_ft, mach)
-        return {"Thrust_lbf": round(thrust, 0), "RPM_pct": round(rpm, 1), "FuelFlow_pph": round(ff, 0)}
+        thrust, ff = self._interpolate(altitude_ft, mach, rpm)
+
+        # Climb gradient check (if weight + distance provided)
+        if weight_lbs and distance_nm:
+            gradient = (thrust * 2 / weight_lbs) * 6076  # ft/nm approx
+            if gradient < 300:  # if below spec, bump thrust
+                rpm = min(self.ab_rpm, rpm + 2)
+                thrust, ff = self._interpolate(altitude_ft, mach, rpm)
+
+        return {
+            "Thrust_lbf": thrust,
+            "RPM_pct": rpm,
+            "FuelFlow_pph": ff
+        }
