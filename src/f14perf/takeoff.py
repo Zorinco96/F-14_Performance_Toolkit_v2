@@ -44,6 +44,9 @@ class TakeoffModel:
         require_columns(self.df, self.REQUIRED, "f14_perf.csv")
         self.df["model"] = self.df["model"].astype(str).str.upper()
         self.df["thrust"] = self.df["thrust"].astype(str).str.upper()
+        self.vspeeds = read_csv("vspeeds.csv", data_dir)
+        self.vspeeds.columns = [str(c).strip().lower() for c in self.vspeeds.columns]
+        require_columns(self.vspeeds, {"weight", "v2", "vfs"}, "vspeeds.csv")
         self.engine = F110Deck(data_dir)
 
     def _mil_table(self, flaps: str, weight_lb: float, pa_ft: float, oat_c: float) -> tuple[dict, Provenance]:
@@ -96,6 +99,38 @@ class TakeoffModel:
             "Medium near calibration point; lower as weight/altitude/temperature depart the grid",
         )
         return values, prov
+
+    def _trim_reference(
+        self,
+        weight_lb: float,
+        active_v2_kt: float,
+    ) -> tuple[float, float, Provenance]:
+        legacy_v2 = regular_grid_interpolate(
+            self.vspeeds,
+            {"weight": weight_lb},
+            "v2",
+        )
+        legacy_vfs = regular_grid_interpolate(
+            self.vspeeds,
+            {"weight": weight_lb},
+            "vfs",
+        )
+        vfs_spread_kt = legacy_vfs.value - legacy_v2.value
+        if not 0.0 < vfs_spread_kt <= 40.0:
+            raise ValueError(
+                "Legacy Vfs-to-V2 spread must be greater than 0 and no more than 40 kt."
+            )
+
+        vfs_kt = active_v2_kt + vfs_spread_kt
+        trim_target_kt = active_v2_kt + 0.5 * vfs_spread_kt
+        provenance = Provenance(
+            Method.ESTIMATED,
+            "Legacy Vfs spread applied to active v3 V2",
+            f"vspeeds.csv spread {vfs_spread_kt:.1f} kt; target at 50% of V2-to-Vfs interval; "
+            f"V2 lookup {legacy_v2.method.value}; Vfs lookup {legacy_vfs.method.value}",
+            "Low-medium until Vfs and pitch-trim targets are validated in controlled DCS tests",
+        )
+        return vfs_kt, trim_target_kt, provenance
 
     @staticmethod
     def _surface_slope_factors(headwind_kt: float, vr_kt: float, slope_pct: float, condition: str) -> tuple[float, float, list[str]]:
@@ -193,6 +228,10 @@ class TakeoffModel:
         pa = pressure_altitude_ft(field_elev, inputs.environment.qnh_inhg)
         base, table_prov = self._mil_table(flaps, inputs.weight_lb, pa, inputs.environment.oat_c)
         corrected, thrust_prov = self._reduced_thrust(base, rpm_pct, pa, inputs.environment.oat_c, base["vr_kt"])
+        vfs_kt, trim_target_kt, trim_prov = self._trim_reference(
+            inputs.weight_lb,
+            corrected["v2_kt"],
+        )
 
         raw_headwind, _ = wind_components(
             inputs.environment.wind_dir_deg,
@@ -258,6 +297,7 @@ class TakeoffModel:
             v1_prov,
             climb_prov,
             eig_reference.provenance,
+            trim_prov,
             source="Takeoff solution",
         )
         return TakeoffResult(
@@ -268,6 +308,7 @@ class TakeoffModel:
             v1_reference_kt=round(corrected["v1_kt"]),
             vr_kt=round(corrected["vr_kt"]),
             v2_kt=round(corrected["v2_kt"]),
+            vfs_kt=round(vfs_kt),
             vs_kt=round(corrected["vs_kt"]),
             asd_ft=round(asd),
             agd_ft=round(agd),
@@ -284,9 +325,10 @@ class TakeoffModel:
             fuel_flow_pph_per_engine=round(eig_reference.fuel_flow_pph_per_engine),
             fuel_flow_pph_total=round(eig_reference.fuel_flow_pph_per_engine * 2.0),
             stabilizer_trim_anu=None,
+            stabilizer_trim_target_kt=round(trim_target_kt),
             stabilizer_trim_note=(
-                "No verified takeoff stabilizer schedule is present in the project data; "
-                "the calibration target remains trimmed flight near V2 to V2+15 with gear up."
+                "Set 000 before takeoff. After liftoff, trim toward the midpoint between V2 and Vfs; "
+                "no numerical stabilator-angle schedule is asserted."
             ),
             provenance=prov,
             warnings=warnings,
