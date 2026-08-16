@@ -18,7 +18,7 @@ from .weather import wind_components
 
 CONFIG_TABLE_CODE = {"UP": 0, "MANEUVER": 20, "FULL": 40}
 AUTO_ORDER = ("UP", "MANEUVER", "FULL")
-RPM_FLOOR = {"UP": 85, "MANEUVER": 90, "FULL": 98}
+RPM_FLOOR = {"UP": 85, "MANEUVER": 90, "FULL": 96}
 MANEUVER_ANCHOR = {
     "weight_lb": 65000.0,
     "vs_kt": 122.0,
@@ -111,8 +111,21 @@ class TakeoffModel:
             stop *= 1.25
             warnings.append("Wet-runway correction is an engineering estimate, not a released F-14B chart correction.")
         if headwind_kt < 0:
-            warnings.append(f"Tailwind component {abs(headwind_kt):.1f} kt increases runway requirement.")
+            warnings.append(f"Credited tailwind component {abs(headwind_kt):.1f} kt increases runway requirement.")
         return stop, tod, warnings
+
+    @staticmethod
+    def _credited_wind(
+        headwind_kt: float,
+        headwind_credit_pct: float,
+        tailwind_penalty_pct: float,
+    ) -> float:
+        if not 0.0 <= headwind_credit_pct <= 100.0:
+            raise ValueError("Headwind credit must be between 0 and 100 percent.")
+        if not 100.0 <= tailwind_penalty_pct <= 200.0:
+            raise ValueError("Tailwind penalty must be between 100 and 200 percent.")
+        factor = headwind_credit_pct if headwind_kt >= 0.0 else tailwind_penalty_pct
+        return headwind_kt * factor / 100.0
 
     def _reduced_thrust(self, base: dict, rpm_pct: float, pa_ft: float, oat_c: float, vr_kt: float) -> tuple[dict, Provenance]:
         atm = atmosphere(pa_ft, oat_c)
@@ -181,13 +194,21 @@ class TakeoffModel:
         base, table_prov = self._mil_table(flaps, inputs.weight_lb, pa, inputs.environment.oat_c)
         corrected, thrust_prov = self._reduced_thrust(base, rpm_pct, pa, inputs.environment.oat_c, base["vr_kt"])
 
-        headwind, _ = wind_components(
+        raw_headwind, _ = wind_components(
             inputs.environment.wind_dir_deg,
             inputs.environment.wind_speed_kt,
             inputs.runway.heading_deg,
         )
+        credited_headwind = self._credited_wind(
+            raw_headwind,
+            inputs.headwind_credit_pct,
+            inputs.tailwind_penalty_pct,
+        )
         stop_factor, go_factor, warnings = self._surface_slope_factors(
-            headwind, corrected["vr_kt"], inputs.runway.slope_pct, inputs.runway.condition
+            credited_headwind,
+            corrected["vr_kt"],
+            inputs.runway.slope_pct,
+            inputs.runway.condition,
         )
         asd_before_v1 = corrected["asd_ft"] * stop_factor
         agd_before_v1 = corrected["agd_ft"] * go_factor
@@ -202,6 +223,10 @@ class TakeoffModel:
         )
         climb, climb_oei, climb_prov = self._calibrated_climb(
             flaps, rpm_pct, inputs.weight_lb, pa, inputs.environment.oat_c, corrected["v2_kt"]
+        )
+        eig_reference = self.engine.takeoff_eig_reference(rpm_pct)
+        thrust_setting = (
+            "MILITARY" if rpm_pct >= 99.5 else f"REDUCED ({rpm_pct:.0f}% RPM)"
         )
 
         factored_asd = asd * inputs.runway_factor
@@ -227,16 +252,23 @@ class TakeoffModel:
         if inputs.environment.oat_c < -10 or inputs.environment.oat_c > 50:
             warnings.append("Temperature is near/outside the primary legacy takeoff grid; inspect provenance carefully.")
 
-        prov = combine(table_prov, thrust_prov, v1_prov, climb_prov, source="Takeoff solution")
+        prov = combine(
+            table_prov,
+            thrust_prov,
+            v1_prov,
+            climb_prov,
+            eig_reference.provenance,
+            source="Takeoff solution",
+        )
         return TakeoffResult(
             feasible=feasible,
             flaps=flaps,
             rpm_pct=round(rpm_pct, 1),
-            v1_kt=round(v1, 1),
-            v1_reference_kt=round(corrected["v1_kt"], 1),
-            vr_kt=round(corrected["vr_kt"], 1),
-            v2_kt=round(corrected["v2_kt"], 1),
-            vs_kt=round(corrected["vs_kt"], 1),
+            v1_kt=round(v1),
+            v1_reference_kt=round(corrected["v1_kt"]),
+            vr_kt=round(corrected["vr_kt"]),
+            v2_kt=round(corrected["v2_kt"]),
+            vs_kt=round(corrected["vs_kt"]),
             asd_ft=round(asd),
             agd_ft=round(agd),
             factored_asd_ft=round(factored_asd),
@@ -246,11 +278,23 @@ class TakeoffModel:
             climb_gradient_ft_nm=round(climb),
             climb_gradient_oei_ft_nm=round(climb_oei),
             pressure_altitude_ft=round(pa),
-            headwind_kt=round(headwind, 1),
+            headwind_kt=round(raw_headwind, 1),
+            credited_headwind_kt=round(credited_headwind, 1),
+            thrust_setting=thrust_setting,
+            fuel_flow_pph_per_engine=round(eig_reference.fuel_flow_pph_per_engine),
+            fuel_flow_pph_total=round(eig_reference.fuel_flow_pph_per_engine * 2.0),
+            stabilizer_trim_anu=None,
+            stabilizer_trim_note=(
+                "No verified takeoff stabilizer schedule is present in the project data; "
+                "the calibration target remains trimmed flight near V2 to V2+15 with gear up."
+            ),
             provenance=prov,
             warnings=warnings,
             notes=[
                 f"Runway planning factor: {inputs.runway_factor:.2f}.",
+                f"Wind policy: {inputs.headwind_credit_pct:.0f}% headwind credit / "
+                f"{inputs.tailwind_penalty_pct:.0f}% tailwind penalty.",
+                "Fuel-flow guidance is a per-engine static DCS EIG calibration reference.",
                 "AUTO never selects afterburner for takeoff.",
                 "OEI climb is advisory; the locked AUTO gate is AEO climb gradient.",
                 "FULL uses the legacy table's flap_deg=40 code while the cockpit configuration is displayed as FULL.",
