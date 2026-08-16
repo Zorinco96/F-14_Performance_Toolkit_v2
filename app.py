@@ -132,6 +132,13 @@ if thrust_mode == "MANUAL":
     rpm = st.sidebar.slider("Takeoff RPM (%)", 85, 100, 100)
 runway_factor = st.sidebar.number_input("Runway planning factor", 1.00, 1.50, 1.10, 0.01)
 climb_gate = st.sidebar.number_input("AEO climb gate (ft/NM)", 0, 1000, 300, 25)
+wind_policy = st.sidebar.radio(
+    "Takeoff wind credit",
+    ["50% HW / 150% TW", "0% HW / 150% TW"],
+    help="The selected credit is applied to takeoff runway calculations only.",
+)
+headwind_credit = 50.0 if wind_policy.startswith("50%") else 0.0
+tailwind_penalty = 150.0
 isa_delta = st.sidebar.number_input("ISA deviation for climb/cruise (°C)", -30.0, 40.0, 0.0, 1.0)
 
 inputs = TakeoffInputs(
@@ -143,6 +150,8 @@ inputs = TakeoffInputs(
     rpm_pct=float(rpm) if rpm is not None else None,
     runway_factor=float(runway_factor),
     climb_target_ft_nm=float(climb_gate),
+    headwind_credit_pct=headwind_credit,
+    tailwind_penalty_pct=tailwind_penalty,
 )
 
 m = models()
@@ -162,7 +171,7 @@ headwind, crosswind = wind_components(environment.wind_dir_deg, environment.wind
 
 summary1, summary2, summary3, summary4 = st.columns(4)
 summary1.metric("Takeoff", "GO" if takeoff.feasible else "NO-GO")
-summary2.metric("Config / RPM", f"{takeoff.flaps} / {takeoff.rpm_pct:.0f}%")
+summary2.metric("Config / Thrust", f"{takeoff.flaps} / {takeoff.thrust_setting}")
 summary3.metric("Runway wind", f"{headwind:+.0f} kt HW", f"{abs(crosswind):.0f} kt XW")
 summary4.metric("Optimum cruise", f"M {cruise.optimum_mach:.3f}", f"FL{cruise.optimum_altitude_ft/100:.0f}")
 
@@ -175,6 +184,11 @@ with takeoff_tab:
         st.success("TAKEOFF PERFORMANCE: planning criteria satisfied")
     else:
         st.error("TAKEOFF PERFORMANCE: one or more planning criteria not satisfied")
+    p1, p2, p3, p4 = st.columns(4)
+    p1.metric("Flaps", takeoff.flaps)
+    p2.metric("Thrust", takeoff.thrust_setting)
+    p3.metric("Engine target", f"{takeoff.rpm_pct:.0f}% N2")
+    p4.metric("FF reference", f"{takeoff.fuel_flow_pph_per_engine:,.0f} pph / engine")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("V1", f"{takeoff.v1_kt:.0f} kt", f"table ref {takeoff.v1_reference_kt:.0f}")
     c2.metric("Vr", f"{takeoff.vr_kt:.0f} kt")
@@ -185,10 +199,16 @@ with takeoff_tab:
     d2.metric("AGD", f"{takeoff.agd_ft:.0f} ft", f"factored {takeoff.factored_agd_ft:.0f}")
     d3.metric("ASDA margin", f"{takeoff.asda_margin_ft:+.0f} ft")
     d4.metric("TODA margin", f"{takeoff.toda_margin_ft:+.0f} ft")
-    g1, g2, g3 = st.columns(3)
+    g1, g2, g3, g4 = st.columns(4)
     g1.metric("AEO climb", f"{takeoff.climb_gradient_ft_nm:.0f} ft/NM")
     g2.metric("OEI advisory", f"{takeoff.climb_gradient_oei_ft_nm:.0f} ft/NM")
     g3.metric("Pressure altitude", f"{takeoff.pressure_altitude_ft:.0f} ft")
+    g4.metric(
+        "Wind used",
+        f"{takeoff.credited_headwind_kt:+.1f} kt",
+        f"raw {takeoff.headwind_kt:+.1f} kt",
+    )
+    st.info(f"Stabilizer trim: NOT MODELED. {takeoff.stabilizer_trim_note}")
     for warning in takeoff.warnings:
         st.warning(warning)
     prov_caption(takeoff.provenance)
@@ -212,7 +232,7 @@ with climb_tab:
         }
         for p in climb_schedule
     ])
-    st.dataframe(climb_df, use_container_width=True, hide_index=True)
+    st.dataframe(climb_df, width="stretch", hide_index=True)
     prov_caption(climb_schedule[0].provenance)
 
 with cruise_tab:
@@ -262,10 +282,14 @@ with mission_tab:
     fuel = m["fuel"].plan(starting_fuel, route_nm, climb_schedule, cruise, bingo, joker_margin)
     st.subheader("Mission Card")
     mc1, mc2, mc3, mc4 = st.columns(4)
-    mc1.metric("TO config", f"{takeoff.flaps} / {takeoff.rpm_pct:.0f}%")
+    mc1.metric("TO config", f"{takeoff.flaps} / {takeoff.thrust_setting}")
     mc2.metric("V1 / Vr / V2", f"{takeoff.v1_kt:.0f} / {takeoff.vr_kt:.0f} / {takeoff.v2_kt:.0f}")
-    mc3.metric("Cruise", f"M{cruise.optimum_mach:.3f} / FL{cruise.optimum_altitude_ft/100:.0f}")
-    mc4.metric("Landing", f"15 units / ~{landing.on_speed_ias_est_kt:.0f} kt")
+    mc3.metric("Engine target", f"{takeoff.rpm_pct:.0f}% N2 / {takeoff.fuel_flow_pph_per_engine:,.0f} FF")
+    mc4.metric("AEO climb", f"{takeoff.climb_gradient_ft_nm:.0f} ft/NM")
+    st.caption(f"Takeoff trim: NOT MODELED. {takeoff.stabilizer_trim_note}")
+    mc5, mc6 = st.columns(2)
+    mc5.metric("Cruise", f"M{cruise.optimum_mach:.3f} / FL{cruise.optimum_altitude_ft/100:.0f}")
+    mc6.metric("Landing", f"15 units / ~{landing.on_speed_ias_est_kt:.0f} kt")
     f1, f2, f3, f4 = st.columns(4)
     f1.metric("Mission burn", f"{fuel.mission_burn_lb:.0f} lb")
     f2.metric("Estimated landing fuel", f"{fuel.landing_fuel_lb:.0f} lb")
@@ -275,7 +299,7 @@ with mission_tab:
         st.warning(warning)
     st.markdown("**Climb card**")
     compact = climb_df[["Altitude ft", "IAS kt", "RPM %", "ROC fpm", "Gradient ft/NM"]]
-    st.dataframe(compact, use_container_width=True, hide_index=True)
+    st.dataframe(compact, width="stretch", hide_index=True)
     prov_caption(fuel.provenance)
 
 with data_tab:
