@@ -45,9 +45,12 @@ This project is for **DCS simulation only**. It is not an approved real-world F-
 
 ### Climb
 
-- recommended 1,000 to 10,000 ft schedule
+- named Most Efficient and Minimum Time (MIL) profiles from 1,000 to 10,000 ft
+- selectable mission-card climb strategy
+- side-by-side modeled time and fuel comparison
 - 190–250 KIAS search range
-- 85–100% dry RPM search
+- Most Efficient: lowest 85–100% dry RPM meeting the gradient gate, then best fuel-per-foot speed
+- Minimum Time: 100% dry MIL and maximum modeled rate of climb
 - climb gradient
 - rate of climb
 - fuel flow
