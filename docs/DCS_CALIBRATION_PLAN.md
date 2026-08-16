@@ -81,7 +81,20 @@ Record:
 
 This will replace the current nonlinear reduced-thrust assumption.
 
-## Priority 4: climb
+## Priority 4: Vfs and stabilator trim target
+
+At 55,000, 65,000, and 75,000 lb, test each takeoff flap configuration on a standard-day, calm-wind departure:
+
+1. Set pitch trim 000 before takeoff.
+2. Record the generated V2, Vfs, and midpoint trim-target speed.
+3. After liftoff, complete the intended gear and flap transition.
+4. Stabilize at the displayed midpoint speed and trim to remove steady pitch force.
+5. Record pitch-trim command position or export value, stabilator position if available, configuration, and actual stabilized IAS.
+6. Repeat each condition three times.
+
+The midpoint speed may remain an advisory estimate while testing is incomplete. Do not publish a numerical stabilator-angle schedule until the measured relationship is repeatable across weight and flap configurations.
+
+## Priority 5: climb
 
 At 60,000 and 70,000 lb:
 
@@ -98,7 +111,7 @@ Record steady:
 
 For each weight, fly the generated Most Efficient and Minimum Time (MIL) schedules from brake release or 1,000 ft through 10,000 ft. Record elapsed time, fuel at profile start, and fuel at 10,000 ft. Compare the measured time/fuel tradeoff with the profile summary before changing either optimizer.
 
-## Priority 5: cruise
+## Priority 6: cruise
 
 At 50/60/70k gross weight and representative drag indices:
 
@@ -109,7 +122,7 @@ At 50/60/70k gross weight and representative drag indices:
 
 This validates whether the legacy optimum table is consistent with current DCS and calibrates the fuel model.
 
-## Priority 6: landing
+## Priority 7: landing
 
 At 45/50/55k landing weight:
 
@@ -130,4 +143,4 @@ Then test headwind and wet-surface effects separately.
 
 Store every raw run, not only averages. Recommended columns:
 
-`date,dcs_version,variant,map,airport,runway,weight_lb,drag_index,pa_ft,oat_c,wind_dir,wind_kt,condition,flaps,rpm_pct,v1_kt,vr_kt,v2_kt,engine_failure_kt,decision,ground_distance_ft,height50_distance_ft,climb_gradient_ft_nm,roc_fpm,fuel_flow_left,fuel_flow_right,notes`
+`date,dcs_version,variant,map,airport,runway,weight_lb,drag_index,pa_ft,oat_c,wind_dir,wind_kt,condition,flaps,rpm_pct,v1_kt,vr_kt,v2_kt,vfs_kt,trim_target_kt,trim_command,stabilator_position,engine_failure_kt,decision,ground_distance_ft,height50_distance_ft,climb_gradient_ft_nm,roc_fpm,fuel_flow_left,fuel_flow_right,notes`
