@@ -2,10 +2,16 @@ from src.f14perf.takeoff import AutoTakeoffSelector, TakeoffModel
 from src.f14perf.types import Environment, Runway, TakeoffInputs
 
 
-def baseline():
-    env = Environment(field_elevation_ft=0, oat_c=15, qnh_inhg=29.92)
-    rwy = Runway(heading_deg=0, tora_ft=8000, toda_ft=8000, asda_ft=8000, elevation_ft=0)
-    return TakeoffInputs(65000, env, rwy)
+def baseline(environment=None, runway=None, **overrides):
+    env = environment or Environment(field_elevation_ft=0, oat_c=15, qnh_inhg=29.92)
+    rwy = runway or Runway(
+        heading_deg=0,
+        tora_ft=8000,
+        toda_ft=8000,
+        asda_ft=8000,
+        elevation_ft=0,
+    )
+    return TakeoffInputs(65000, env, rwy, **overrides)
 
 
 def test_legacy_baseline_table_points(data_dir):
@@ -32,12 +38,60 @@ def test_maneuver_calibration_anchor(data_dir):
 def test_auto_uses_no_afterburner_and_respects_floor(data_dir):
     result = AutoTakeoffSelector(data_dir).select(baseline())
     assert result.flaps in {"UP", "MANEUVER", "FULL"}
-    floors = {"UP": 85, "MANEUVER": 90, "FULL": 98}
+    floors = {"UP": 85, "MANEUVER": 90, "FULL": 96}
     assert result.rpm_pct >= floors[result.flaps]
     assert result.rpm_pct <= 100
+
+
+def test_full_auto_floor_is_96_percent(data_dir):
+    result = AutoTakeoffSelector(data_dir).select(baseline(flaps="FULL"))
+    assert result.feasible
+    assert result.flaps == "FULL"
+    assert result.rpm_pct == 96
 
 
 def test_balanced_v1_below_vr(data_dir):
     result = TakeoffModel(data_dir).calculate(baseline(), "UP", 100)
     assert result.v1_kt < result.vr_kt
     assert result.v1_kt >= 0.84 * result.vr_kt - 1
+
+
+def test_default_takeoff_wind_credit(data_dir):
+    headwind = Environment(oat_c=15, qnh_inhg=29.92, wind_dir_deg=0, wind_speed_kt=20)
+    result = TakeoffModel(data_dir).calculate(
+        baseline(environment=headwind),
+        "UP",
+        100,
+    )
+    assert result.headwind_kt == 20
+    assert result.credited_headwind_kt == 10
+
+
+def test_tailwind_penalty_and_zero_headwind_option(data_dir):
+    tailwind = Environment(oat_c=15, qnh_inhg=29.92, wind_dir_deg=180, wind_speed_kt=20)
+    tailwind_result = TakeoffModel(data_dir).calculate(
+        baseline(environment=tailwind),
+        "UP",
+        100,
+    )
+    assert tailwind_result.headwind_kt == -20
+    assert tailwind_result.credited_headwind_kt == -30
+
+    headwind = Environment(oat_c=15, qnh_inhg=29.92, wind_dir_deg=0, wind_speed_kt=20)
+    no_credit_result = TakeoffModel(data_dir).calculate(
+        baseline(environment=headwind, headwind_credit_pct=0),
+        "UP",
+        100,
+    )
+    assert no_credit_result.credited_headwind_kt == 0
+
+
+def test_resolved_engine_guidance_and_trim_status(data_dir):
+    result = AutoTakeoffSelector(data_dir).select(
+        baseline(thrust="MANUAL", rpm_pct=90)
+    )
+    assert result.thrust_setting == "REDUCED (90% RPM)"
+    assert result.fuel_flow_pph_per_engine == 4800
+    assert result.fuel_flow_pph_total == 9600
+    assert result.stabilizer_trim_anu is None
+    assert "No verified" in result.stabilizer_trim_note
