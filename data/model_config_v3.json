@@ -1,0 +1,21 @@
+{
+  "aircraft": "F-14B",
+  "simulation": "DCS World",
+  "policy": {
+    "allow_afterburner_auto_takeoff": false,
+    "runway_factor": 1.10,
+    "aeo_climb_gate_ft_nm": 300,
+    "takeoff_rpm_floor_pct": {
+      "UP": 85,
+      "MANEUVER": 90,
+      "FULL": 98
+    },
+    "climb_schedule_max_ias_kt": 250
+  },
+  "calibration": {
+    "condition": "65000 lb, approximately sea level, 15 C, 29.92 inHg, calm, dry, MIL",
+    "UP": {"vr_kt": 159, "asd_ft": 2460, "agd_ft": 2900},
+    "MANEUVER": {"vr_kt": 146, "asd_ft": 2583, "agd_ft": 2456},
+    "FULL": {"vr_kt": 140, "asd_ft": 2168, "agd_ft": 2550}
+  }
+}
