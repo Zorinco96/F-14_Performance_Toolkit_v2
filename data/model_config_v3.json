@@ -15,7 +15,13 @@
       "MANEUVER": 90,
       "FULL": 96
     },
-    "climb_schedule_max_ias_kt": 250
+    "climb_schedule_max_ias_kt": 250,
+    "climb_profiles": {
+      "default": "MOST_EFFICIENT",
+      "most_efficient_rpm_range_pct": [85, 100],
+      "minimum_time_power": "MILITARY",
+      "minimum_time_rpm_pct": 100
+    }
   },
   "calibration": {
     "condition": "65000 lb, approximately sea level, 15 C, 29.92 inHg, calm, dry, MIL",
