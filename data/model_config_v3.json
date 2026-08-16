@@ -5,10 +5,15 @@
     "allow_afterburner_auto_takeoff": false,
     "runway_factor": 1.10,
     "aeo_climb_gate_ft_nm": 300,
+    "takeoff_wind_credit_pct": {
+      "headwind": 50,
+      "tailwind": 150,
+      "alternate_headwind": 0
+    },
     "takeoff_rpm_floor_pct": {
       "UP": 85,
       "MANEUVER": 90,
-      "FULL": 98
+      "FULL": 96
     },
     "climb_schedule_max_ias_kt": 250
   },
