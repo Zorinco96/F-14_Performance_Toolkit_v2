@@ -28,9 +28,14 @@ This project is for **DCS simulation only**. It is not an approved real-world F-
 - RPM policy floors:
   - UP 85%
   - MANEUVER 90%
-  - FULL 98%
+  - FULL 96%
 - AUTO never selects afterburner
+- default 50% headwind credit / 150% tailwind penalty, with a 0% / 150% option
 - V1 reference, balanced-field-style V1 sweep, Vr, V2, Vs reference
+- integer V-speed presentation
+- resolved MILITARY or REDUCED thrust label
+- target EIG RPM (N2) and calibrated static fuel-flow reference per engine
+- explicit NOT MODELED status for stabilizer trim until a verified schedule is added
 - accelerate-stop distance
 - accelerate-go distance
 - 10% default runway planning factor
@@ -117,6 +122,7 @@ pytest
 - `data/f14_landing_natops_full.csv`
 - `data/f14_cruise_natops.csv`
 - `data/F110_engine.csv`
+- `data/f110_ff_to_rpm_knots.csv`
 - `data/dcs_airports.csv`
 
 The old `data/f14_aero.csv` is retained for historical traceability but is intentionally not authoritative in v3 because it contains malformed values.
