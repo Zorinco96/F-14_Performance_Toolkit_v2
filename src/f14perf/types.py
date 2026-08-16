@@ -87,6 +87,20 @@ class ClimbPoint:
 
 
 @dataclass
+class ClimbProfile:
+    strategy: str
+    label: str
+    points: list[ClimbPoint]
+    time_min: float
+    fuel_burn_lb: float
+    altitude_gain_ft: float
+    target_gradient_ft_nm: float
+    unmet_segments: int
+    provenance: Provenance
+    notes: list[str] = field(default_factory=list)
+
+
+@dataclass
 class LandingResult:
     ground_roll_ft: float
     factored_distance_ft: float
