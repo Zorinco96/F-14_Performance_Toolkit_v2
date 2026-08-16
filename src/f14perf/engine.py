@@ -27,12 +27,20 @@ class F110Deck:
     """
 
     REQUIRED = {"altitude_ft", "mach", "thrust_type", "thrust_lbf", "ff_pph"}
+    TAKEOFF_FF_REQUIRED = {"rpm_pct", "ff_pph"}
 
     def __init__(self, data_dir: Path | str | None = None):
         self.df = read_csv("F110_engine.csv", data_dir)
         self.df.columns = [str(c).strip().lower() for c in self.df.columns]
         require_columns(self.df, self.REQUIRED, "F110_engine.csv")
         self.df["thrust_type"] = self.df["thrust_type"].astype(str).str.upper()
+        self.takeoff_ff = read_csv("f110_ff_to_rpm_knots.csv", data_dir)
+        self.takeoff_ff.columns = [str(c).strip().lower() for c in self.takeoff_ff.columns]
+        require_columns(
+            self.takeoff_ff,
+            self.TAKEOFF_FF_REQUIRED,
+            "f110_ff_to_rpm_knots.csv",
+        )
 
     def _base(self, altitude_ft: float, mach: float, mode: str) -> EnginePoint:
         mode = mode.upper()
@@ -102,6 +110,36 @@ class F110Deck:
             "Medium at MIL grid points; lower for reduced RPM/temperature corrections",
         )
         return EnginePoint(thrust, ff, rpm, prov)
+
+    def takeoff_eig_reference(self, rpm_pct: float) -> EnginePoint:
+        """Return the calibrated static EIG fuel-flow reference for takeoff.
+
+        The source knots are controlled DCS observations near sea level. The
+        F-14B EIG displays high-pressure compressor RPM (N2) and fuel flow for
+        each engine. A commanded 100% MIL setting uses the highest observed
+        99% EIG calibration knot rather than extrapolating false precision.
+        """
+
+        commanded_rpm = max(70.0, min(100.0, float(rpm_pct)))
+        observed_rpm = max(
+            float(self.takeoff_ff["rpm_pct"].min()),
+            min(float(self.takeoff_ff["rpm_pct"].max()), commanded_rpm),
+        )
+        lookup = regular_grid_interpolate(
+            self.takeoff_ff,
+            {"rpm_pct": observed_rpm},
+            "ff_pph",
+        )
+        note = f"{lookup.detail} at {observed_rpm:.0f}% observed EIG RPM"
+        if commanded_rpm > observed_rpm:
+            note += f"; {commanded_rpm:.0f}% MIL command uses the highest measured knot"
+        prov = Provenance(
+            Method.CALIBRATED,
+            "DCS static F110 EIG fuel-flow calibration",
+            note,
+            "Medium near the sea-level calibration knots; advisory away from them",
+        )
+        return EnginePoint(0.0, lookup.value, commanded_rpm, prov)
 
     def total(self, *args, engines: int = 2, **kwargs) -> EnginePoint:
         p = self.point(*args, **kwargs)
