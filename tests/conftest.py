@@ -27,6 +27,14 @@ def data_dir(tmp_path: Path) -> Path:
         {"altitude_ft": 0, "mach": 0.2, "thrust_type": "AB", "thrust_lbf": 30200, "ff_pph": 18000},
     ]
     pd.DataFrame(engine_rows).to_csv(tmp_path / "F110_engine.csv", index=False)
+    pd.DataFrame([
+        {"FF_pph": 1200, "RPM_pct": 71},
+        {"FF_pph": 2500, "RPM_pct": 80},
+        {"FF_pph": 3400, "RPM_pct": 85},
+        {"FF_pph": 4800, "RPM_pct": 90},
+        {"FF_pph": 7000, "RPM_pct": 95},
+        {"FF_pph": 10000, "RPM_pct": 99},
+    ]).to_csv(tmp_path / "f110_ff_to_rpm_knots.csv", index=False)
 
     landing_rows = [{
         "flap_setting": "DOWN", "gross_weight_lbs": 54000,
