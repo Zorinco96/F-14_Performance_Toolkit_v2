@@ -15,6 +15,12 @@
       "MANEUVER": 90,
       "FULL": 96
     },
+    "takeoff_trim": {
+      "pre_takeoff_setting": "000",
+      "vfs_spread_source": "vspeeds.csv Vfs minus V2",
+      "target_fraction_v2_to_vfs": 0.5,
+      "numerical_stabilator_angle": null
+    },
     "climb_schedule_max_ias_kt": 250,
     "climb_profiles": {
       "default": "MOST_EFFICIENT",
