@@ -139,6 +139,19 @@ wind_policy = st.sidebar.radio(
 )
 headwind_credit = 50.0 if wind_policy.startswith("50%") else 0.0
 tailwind_penalty = 150.0
+
+st.sidebar.header("Climb policy")
+climb_strategy_label = st.sidebar.radio(
+    "Climb profile",
+    ["Most Efficient", "Minimum Time (MIL)"],
+    help=(
+        "Most Efficient uses the lowest dry RPM meeting the gradient gate. "
+        "Minimum Time uses 100% dry MIL and maximizes modeled rate of climb."
+    ),
+)
+climb_strategy = (
+    "MOST_EFFICIENT" if climb_strategy_label == "Most Efficient" else "MINIMUM_TIME"
+)
 isa_delta = st.sidebar.number_input("ISA deviation for climb/cruise (°C)", -30.0, 40.0, 0.0, 1.0)
 
 inputs = TakeoffInputs(
@@ -158,9 +171,11 @@ m = models()
 
 try:
     takeoff = m["takeoff_auto"].select(inputs)
-    climb_schedule = m["climb"].recommend_schedule(
+    climb_profiles = m["climb"].profiles(
         takeoff_weight, isa_delta_c=isa_delta, drag_index=drag_index, target_gradient_ft_nm=climb_gate
     )
+    climb_profile = climb_profiles[climb_strategy]
+    climb_schedule = climb_profile.points
     cruise = m["cruise"].optimum(takeoff_weight, drag_index, isa_delta)
     landing = m["landing"].calculate(landing_weight, environment, runway, "DOWN", runway_factor)
 except Exception as exc:
@@ -217,8 +232,18 @@ with takeoff_tab:
             st.write(f"• {note}")
 
 with climb_tab:
-    st.subheader("Recommended climb schedule: 1,000 to 10,000 ft")
-    st.caption("AUTO searches 190–250 KIAS and 85–100% RPM. Recommended IAS never exceeds 250 KIAS.")
+    st.subheader(f"{climb_profile.label}: 1,000 to 10,000 ft")
+    efficient_profile = climb_profiles["MOST_EFFICIENT"]
+    minimum_time_profile = climb_profiles["MINIMUM_TIME"]
+    cp1, cp2, cp3, cp4 = st.columns(4)
+    cp1.metric("Efficient time", f"{efficient_profile.time_min:.2f} min")
+    cp2.metric("Efficient fuel", f"{efficient_profile.fuel_burn_lb:,.0f} lb")
+    cp3.metric("Min-time time", f"{minimum_time_profile.time_min:.2f} min")
+    cp4.metric("Min-time fuel", f"{minimum_time_profile.fuel_burn_lb:,.0f} lb")
+    st.caption(
+        "Both profiles search 190–250 KIAS and retain the 250 KIAS ceiling. "
+        "The comparison is model-relative and is not a released F-14B climb chart."
+    )
     climb_df = pd.DataFrame([
         {
             "Altitude ft": p.altitude_ft,
@@ -233,7 +258,12 @@ with climb_tab:
         for p in climb_schedule
     ])
     st.dataframe(climb_df, width="stretch", hide_index=True)
-    prov_caption(climb_schedule[0].provenance)
+    for note in climb_profile.notes:
+        if climb_profile.unmet_segments and "cannot meet" in note:
+            st.warning(note)
+        else:
+            st.write(f"• {note}")
+    prov_caption(climb_profile.provenance)
 
 with cruise_tab:
     c1, c2, c3, c4 = st.columns(4)
@@ -287,9 +317,14 @@ with mission_tab:
     mc3.metric("Engine target", f"{takeoff.rpm_pct:.0f}% N2 / {takeoff.fuel_flow_pph_per_engine:,.0f} FF")
     mc4.metric("AEO climb", f"{takeoff.climb_gradient_ft_nm:.0f} ft/NM")
     st.caption(f"Takeoff trim: NOT MODELED. {takeoff.stabilizer_trim_note}")
-    mc5, mc6 = st.columns(2)
+    mc5, mc6, mc7 = st.columns(3)
     mc5.metric("Cruise", f"M{cruise.optimum_mach:.3f} / FL{cruise.optimum_altitude_ft/100:.0f}")
     mc6.metric("Landing", f"15 units / ~{landing.on_speed_ias_est_kt:.0f} kt")
+    mc7.metric(
+        "Climb profile",
+        climb_profile.label,
+        f"{climb_profile.time_min:.2f} min / {climb_profile.fuel_burn_lb:,.0f} lb to 10k",
+    )
     f1, f2, f3, f4 = st.columns(4)
     f1.metric("Mission burn", f"{fuel.mission_burn_lb:.0f} lb")
     f2.metric("Estimated landing fuel", f"{fuel.landing_fuel_lb:.0f} lb")
@@ -297,7 +332,7 @@ with mission_tab:
     f4.metric("BINGO", f"{fuel.bingo_lb:.0f} lb")
     for warning in fuel.warnings:
         st.warning(warning)
-    st.markdown("**Climb card**")
+    st.markdown(f"**Climb card: {climb_profile.label}**")
     compact = climb_df[["Altitude ft", "IAS kt", "RPM %", "ROC fpm", "Gradient ft/NM"]]
     st.dataframe(compact, width="stretch", hide_index=True)
     prov_caption(fuel.provenance)
