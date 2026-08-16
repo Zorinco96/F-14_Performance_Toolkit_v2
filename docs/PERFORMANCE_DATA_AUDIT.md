@@ -70,7 +70,11 @@ A direct maneuver-flap table has not been confirmed in the legacy grid. The curr
 
 V3 scales this anchor with the UP-table environmental trend and square-root weight speed scaling. This is marked CALIBRATED.
 
-### 4. Landing grid: `data/f14_landing_natops_full.csv`
+### 4. Legacy Vfs spread: `data/vspeeds.csv`
+
+The legacy V-speed table includes V2 and Vfs versus gross weight, but its absolute V2 baseline does not match the active configuration-specific takeoff grid. V3 does not substitute those absolute values into the takeoff solution. It applies only the table's Vfs-minus-V2 spread to the active V2, then places the advisory pitch-trim target at the midpoint of that interval. Both Vfs and the trim target are marked ESTIMATED pending controlled DCS validation.
+
+### 5. Landing grid: `data/f14_landing_natops_full.csv`
 
 This is a dense ground-roll grid over:
 
@@ -82,19 +86,19 @@ This is a dense ground-roll grid over:
 
 V3 performs multilinear interpolation. Wet-runway corrections are not present in the source grid and are therefore marked ESTIMATED.
 
-### 5. Cruise table: `data/f14_cruise_natops.csv`
+### 6. Cruise table: `data/f14_cruise_natops.csv`
 
 The table provides optimum altitude and optimum Mach versus gross weight and drag index. The source note identifies a previously digitized F-14 performance table.
 
 V3 uses the table directly for optimum altitude/Mach. Fuel flow and specific range are then estimated with the F110 and aerodynamic models.
 
-### 6. F110 deck: `data/F110_engine.csv`
+### 7. F110 deck: `data/F110_engine.csv`
 
 The file contains IDLE, MIL, and AB thrust/fuel-flow points versus altitude and Mach. V3 treats it as a legacy simulation engine deck, not a released certification/NATOPS engine deck.
 
 Reduced dry thrust between idle and MIL is modeled nonlinearly and marked ESTIMATED.
 
-### 7. DCS airport database
+### 8. DCS airport database
 
 `data/dcs_airports.csv` provides map, airfield, runway end, heading, TORA/TODA/ASDA, threshold elevation, slope, and notes.
 
@@ -148,13 +152,14 @@ Preferred sequence:
 
 1. Controlled engine-failure takeoff sweeps for true balanced-field V1
 2. Maneuver-flap takeoff grid across weight/PA/OAT
-3. AEO and OEI climb gradients versus configuration and RPM
-4. Full climb performance charts through cruise altitude
-5. Cruise fuel-flow validation at multiple weights/drag indices
-6. Landing on-speed IAS versus weight in DCS
-7. Wet-runway reject and landing tests
-8. Accurate drag-index mapping to aerodynamic drag
-9. F-14B(U)-specific differences, if DCS behavior diverges from baseline F-14B
+3. Vfs and stabilator trim-command validation versus weight and flap configuration
+4. AEO and OEI climb gradients versus configuration and RPM
+5. Full climb performance charts through cruise altitude
+6. Cruise fuel-flow validation at multiple weights/drag indices
+7. Landing on-speed IAS versus weight in DCS
+8. Wet-runway reject and landing tests
+9. Accurate drag-index mapping to aerodynamic drag
+10. F-14B(U)-specific differences, if DCS behavior diverges from baseline F-14B
 
 ## Interpretation standard
 
