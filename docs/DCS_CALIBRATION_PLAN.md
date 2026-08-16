@@ -96,6 +96,8 @@ Record steady:
 - vertical speed
 - aircraft configuration
 
+For each weight, fly the generated Most Efficient and Minimum Time (MIL) schedules from brake release or 1,000 ft through 10,000 ft. Record elapsed time, fuel at profile start, and fuel at 10,000 ft. Compare the measured time/fuel tradeoff with the profile summary before changing either optimizer.
+
 ## Priority 5: cruise
 
 At 50/60/70k gross weight and representative drag indices:
