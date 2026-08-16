@@ -86,12 +86,31 @@ def test_tailwind_penalty_and_zero_headwind_option(data_dir):
     assert no_credit_result.credited_headwind_kt == 0
 
 
-def test_resolved_engine_guidance_and_trim_status(data_dir):
+def test_resolved_engine_guidance_and_speed_based_trim_target(data_dir):
     result = AutoTakeoffSelector(data_dir).select(
         baseline(thrust="MANUAL", rpm_pct=90)
     )
     assert result.thrust_setting == "REDUCED (90% RPM)"
     assert result.fuel_flow_pph_per_engine == 4800
     assert result.fuel_flow_pph_total == 9600
+    assert result.vfs_kt == result.v2_kt + 20
+    assert result.stabilizer_trim_target_kt == round(
+        (result.v2_kt + result.vfs_kt) / 2
+    )
+    assert result.v2_kt < result.stabilizer_trim_target_kt < result.vfs_kt
     assert result.stabilizer_trim_anu is None
-    assert "No verified" in result.stabilizer_trim_note
+    assert "Set 000 before takeoff" in result.stabilizer_trim_note
+    assert "no numerical stabilator-angle schedule" in result.stabilizer_trim_note
+
+
+def test_trim_target_remains_between_v2_and_vfs_across_model_range(data_dir):
+    model = TakeoffModel(data_dir)
+    for weight_lb in (40000, 65000, 76000):
+        base = baseline()
+        inputs = TakeoffInputs(weight_lb, base.environment, base.runway)
+        for flaps in ("UP", "MANEUVER", "FULL"):
+            result = model.calculate(inputs, flaps, 100)
+            assert result.v2_kt < result.stabilizer_trim_target_kt < result.vfs_kt
+            assert result.stabilizer_trim_target_kt == round(
+                (result.v2_kt + result.vfs_kt) / 2
+            )
