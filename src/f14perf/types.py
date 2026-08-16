@@ -52,6 +52,7 @@ class TakeoffResult:
     v1_reference_kt: float
     vr_kt: float
     v2_kt: float
+    vfs_kt: float
     vs_kt: float
     asd_ft: float
     agd_ft: float
@@ -69,7 +70,8 @@ class TakeoffResult:
     fuel_flow_pph_per_engine: float = 0.0
     fuel_flow_pph_total: float = 0.0
     stabilizer_trim_anu: Optional[float] = None
-    stabilizer_trim_note: str = "Takeoff stabilizer trim is not modeled."
+    stabilizer_trim_target_kt: Optional[float] = None
+    stabilizer_trim_note: str = "Takeoff stabilator trim target is not modeled."
     warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
