@@ -92,6 +92,12 @@ class DerateCalculator:
         """
         thrust_type = "REDUCED" if derate_type in ["AUTO", "MANUAL"] else derate_type
         warnings = results.get("Warnings", "")
+        trim_target = results.get("stabilizer_trim_target_kt")
+        trim_setting = (
+            f"000 before takeoff / trim toward {trim_target:.0f} KIAS after liftoff"
+            if trim_target is not None
+            else "000 before takeoff / trim toward midpoint of V2 and Vfs"
+        )
 
         return {
             "Thrust Type": thrust_type,
@@ -100,10 +106,10 @@ class DerateCalculator:
             "V1 (KCAS)": results.get("V1"),
             "Vr (KCAS)": results.get("Vr"),
             "V2 (KCAS)": results.get("V2"),
-            "Vfs (KCAS)": results.get("Vfs"),
+            "Vfs (KCAS)": results.get("vfs_kt", results.get("Vfs")),
             "Climb Gradient (ft/nm)": results.get("Climb Gradient (ft/nm)"),
             "Warnings": warnings,
-            "Trim Setting": results.get("Trim Setting", "Set for V2 to V2+15"),
+            "Trim Setting": results.get("Trim Setting", trim_setting),
             "Fuel Savings (lbs)": self._compute_fuel_savings(results, rpm),
         }
 
