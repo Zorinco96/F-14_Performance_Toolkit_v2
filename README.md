@@ -31,11 +31,12 @@ This project is for **DCS simulation only**. It is not an approved real-world F-
   - FULL 96%
 - AUTO never selects afterburner
 - default 50% headwind credit / 150% tailwind penalty, with a 0% / 150% option
-- V1 reference, balanced-field-style V1 sweep, Vr, V2, Vs reference
+- V1 reference, balanced-field-style V1 sweep, Vr, V2, Vfs, and Vs reference
 - integer V-speed presentation
 - resolved MILITARY or REDUCED thrust label
 - target EIG RPM (N2) and calibrated static fuel-flow reference per engine
-- explicit NOT MODELED status for stabilizer trim until a verified schedule is added
+- estimated stabilator trim-speed target at the midpoint between V2 and Vfs
+- 000 pre-takeoff trim reminder, with no unsupported numerical stabilator-angle claim
 - accelerate-stop distance
 - accelerate-go distance
 - 10% default runway planning factor
