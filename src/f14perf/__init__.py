@@ -1,4 +1,5 @@
 from .types import (
+    ClimbProfile,
     ClimbPoint,
     CruiseResult,
     EnergyResult,
@@ -12,6 +13,6 @@ from .types import (
 )
 
 __all__ = [
-    "Environment", "Runway", "TakeoffInputs", "TakeoffResult", "ClimbPoint",
+    "Environment", "Runway", "TakeoffInputs", "TakeoffResult", "ClimbPoint", "ClimbProfile",
     "LandingResult", "CruiseResult", "EnergyResult", "FuelPlan", "MissionCard",
 ]
