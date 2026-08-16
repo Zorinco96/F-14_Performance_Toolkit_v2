@@ -39,6 +39,8 @@ class TakeoffInputs:
     rpm_pct: Optional[float] = None
     runway_factor: float = 1.10
     climb_target_ft_nm: float = 300.0
+    headwind_credit_pct: float = 50.0
+    tailwind_penalty_pct: float = 150.0
 
 
 @dataclass
@@ -62,6 +64,12 @@ class TakeoffResult:
     pressure_altitude_ft: float
     headwind_kt: float
     provenance: Provenance
+    credited_headwind_kt: float = 0.0
+    thrust_setting: str = "MILITARY"
+    fuel_flow_pph_per_engine: float = 0.0
+    fuel_flow_pph_total: float = 0.0
+    stabilizer_trim_anu: Optional[float] = None
+    stabilizer_trim_note: str = "Takeoff stabilizer trim is not modeled."
     warnings: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
