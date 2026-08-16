@@ -53,7 +53,7 @@ V3 separately compares:
 - factored ASD to ASDA
 - factored AGD to TODA
 
-Wind is applied using ground-speed energy scaling. Slope and wet-runway effects are engineering corrections and are labeled accordingly.
+Wind is applied using ground-speed energy scaling after the takeoff wind policy is applied. The default credits 50% of a headwind and penalizes 150% of a tailwind. A conservative selectable option uses 0% headwind credit while retaining the 150% tailwind penalty. Slope and wet-runway effects are engineering corrections and are labeled accordingly.
 
 ### AUTO
 
@@ -67,11 +67,21 @@ RPM is searched upward from:
 
 - UP 85%
 - MANEUVER 90%
-- FULL 98%
+- FULL 96%
 
 The first candidate satisfying runway limits and the AEO climb gate is selected.
 
 Afterburner is never selected by AUTO.
+
+## Engine display guidance
+
+The selected dry-thrust setting is displayed as either MILITARY or REDUCED (XX% RPM). The F-14B engine instrument group displays high-pressure compressor RPM (N2) and per-engine fuel flow. The takeoff card therefore shows the selected N2 target and a static per-engine fuel-flow reference interpolated from `f110_ff_to_rpm_knots.csv`.
+
+The fuel-flow knots are controlled DCS observations near sea level. A 100% MIL command uses the highest measured 99% EIG knot instead of extrapolating beyond the calibration. This output is advisory away from the calibration condition.
+
+## Stabilizer trim
+
+The mission-card standard requires takeoff trim, but the repository does not contain a verified F-14B takeoff stabilizer schedule. V3 displays NOT MODELED rather than inventing a value. The retained calibration target is trimmed flight near V2 to V2+15 with the gear up. A numerical ANU value will require a documented source or controlled DCS calibration.
 
 ## Initial climb gate
 
