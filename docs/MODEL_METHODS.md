@@ -81,7 +81,14 @@ The fuel-flow knots are controlled DCS observations near sea level. A 100% MIL c
 
 ## Stabilizer trim
 
-The mission-card standard requires takeoff trim, but the repository does not contain a verified F-14B takeoff stabilizer schedule. V3 displays NOT MODELED rather than inventing a value. The retained calibration target is trimmed flight near V2 to V2+15 with the gear up. A numerical ANU value will require a documented source or controlled DCS calibration.
+The mission-card standard requires Vfs and a takeoff trim reference. The absolute V2 values in the active configuration-specific takeoff model do not use the same baseline as the legacy `vspeeds.csv` table. V3 therefore uses only the legacy Vfs-to-V2 spread and applies it to the active V2:
+
+- `Vfs = active V2 + (legacy Vfs - legacy V2)`
+- `trim target = active V2 + 50% of (Vfs - active V2)`
+
+This places the airborne pitch-trim target at the midpoint between V2 and Vfs while retaining the current UP, MANEUVER, or FULL V2 solution. The output is marked ESTIMATED.
+
+The [Heatblur post-start checklist](https://f14.manuals.heatblur.se/f14ab/procedures/post_start.html) specifies trim 000 before takeoff. V3 retains that reminder and does not convert the target speed into an unsupported numerical stabilator angle. After liftoff, the pilot trims toward hands-off flight near the displayed target speed. A numerical angle will require a documented speed-to-trim schedule or controlled DCS calibration.
 
 ## Initial climb gate
 
