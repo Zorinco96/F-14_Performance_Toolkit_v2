@@ -93,12 +93,22 @@ OEI climb is shown separately as an advisory estimate.
 
 ## Climb schedule
 
-From 1,000 to 10,000 ft, the climb model searches:
+From 1,000 to 10,000 ft, the climb model provides two named profiles. Both search 190 to 250 KIAS and retain the 250 KIAS ceiling through 10,000 ft.
 
-- 190 to 250 KIAS
-- 85 to 100% RPM
+### Most Efficient
 
-It chooses the lowest RPM that satisfies the requested gradient, then selects the candidate with favorable fuel-per-foot climbed.
+The optimizer searches upward from 85% dry RPM. At each altitude it selects the lowest RPM that satisfies the requested climb-gradient gate, then chooses the speed with the lowest modeled fuel flow per foot climbed at that power. This preserves the project’s minimum-required-thrust economy policy. It does not assert that the result is the absolute minimum total fuel to altitude.
+
+### Minimum Time (MIL)
+
+The optimizer fixes power at 100% dry MIL and selects the speed with the highest modeled rate of climb at each altitude. Afterburner is not included in this profile.
+
+Each profile reports:
+
+- IAS, TAS, RPM, rate of climb, gradient, and total fuel flow by altitude
+- modeled elapsed time to 10,000 ft
+- modeled fuel burned to 10,000 ft
+- the number of altitude segments that cannot meet the selected gradient gate
 
 The model uses:
 
@@ -106,7 +116,7 @@ The model uses:
 - ISA atmosphere with ISA deviation
 - low-order clean drag polar
 
-The schedule is an ESTIMATED DCS planning product.
+Both schedules and their comparison are ESTIMATED DCS planning products. They are intended for relative strategy selection and are not released F-14B climb charts.
 
 ## Landing
 
