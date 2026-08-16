@@ -1,95 +1,21 @@
-# Landing Model for F-14 Performance Toolkit (Enhanced)
-# Computes landing performance with flap-specific V-speeds,
-# pressure altitude corrections, wet/contaminated runway factors,
-# and OEI go-around integration with climb_model.
+"""Legacy landing-model compatibility wrapper for v3."""
 
-import numpy as np
-from src.models.climb_model import ClimbModel
-from src.utils.data_loaders import resolve_data_path, load_is_csv
+from src.f14perf.landing import LandingModel as V3LandingModel
+from src.f14perf.types import Environment, Runway
 
 
-class LandingModel:
-    def __init__(self):
-        # NATOPS baseline V-speeds (approx values at 54,000 lbs)
-        self.Vref_base = {"UP": 170, "MAN": 150, "FULL": 140}
-        self.Vac_base = {"UP": 150, "MAN": 135, "FULL": 120}
-        self.Vfs_base = {"UP": 160, "MAN": 145, "FULL": 135}
-        self.base_weight = 54000  # lbs reference
-
-        # Safety margin factor for landing distance
-        self.ldg_safety_factor = 1.1
-
-    def _weight_adjusted_speed(self, base_speed, weight):
-        return base_speed * np.sqrt(weight / self.base_weight)
-
-    def _altitude_correction(self, alt_ft):
-        """Landing distance increases ~7% per 1,000 ft elevation."""
-        return 1 + 0.07 * (alt_ft / 1000.0)
-
-    def calc_landing(
-        self,
-        weight,
-        alt_ft,
-        flap_setting,
-        runway_length=10000,
-        runway_condition="DRY",
-        headwind=0,
-        tailwind=0,
-    ):
-        flap = flap_setting.upper()
-        if flap not in self.Vref_base:
-            raise ValueError(f"Invalid flap setting {flap}. Must be UP, MAN, or FULL.")
-
-        # Adjust speeds for weight and flap
-        Vref = self._weight_adjusted_speed(self.Vref_base[flap], weight)
-        Vac = self._weight_adjusted_speed(self.Vac_base[flap], weight)
-        Vfs = self._weight_adjusted_speed(self.Vfs_base[flap], weight)
-
-        # Baseline landing distance scaling with weight
-        ldr = 8000 * (weight / self.base_weight)
-
-        # Apply safety factor and altitude correction
-        ldr *= self.ldg_safety_factor
-        ldr *= self._altitude_correction(alt_ft)
-
-        # Adjust for runway surface
-        if runway_condition.upper() == "WET":
-            ldr *= 1.15
-        elif runway_condition.upper() == "CONTAMINATED":
-            ldr *= 1.3
-
-        # Adjust for wind
-        ldr *= (1 - 0.05 * (headwind / 10.0))
-        ldr *= (1 + 0.1 * (tailwind / 10.0))
-
-        # OEI go-around using climb_model
-        climb = ClimbModel()
-        oei_profile = climb.compute_profiles(weight, 15, alt_max=3000)
-        oei_grad = oei_profile[0]["OEIGradient"]
-
-        go_around = {
-            "Speed": 200,
-            "VS": oei_grad * (200 / 60),  # ft/min
-            "ThrustMode": "MIL",
-            "OEIGradient": oei_grad,
-        }
-
-        warnings = []
-        if ldr > runway_length:
-            warnings.append("Landing distance exceeds available runway!")
-        if oei_grad < 200:
-            warnings.append("OEI climb gradient below 200 ft/nm!")
-
-        return {
-            "Vref": round(Vref, 1),
-            "Vac": round(Vac, 1),
-            "Vfs": round(Vfs, 1),
-            "LandingDistance": int(ldr),
-            "RunwayLength": runway_length,
-            "Flaps": flap,
-            "RunwayCondition": runway_condition.upper(),
-            "Headwind": headwind,
-            "Tailwind": tailwind,
-            "GoAround": go_around,
-            "Warnings": warnings,
-        }
+class LandingModel(V3LandingModel):
+    def compute_landing(self, weight_lbs, flap_setting="FULL", runway_condition="DRY", **_):
+        env = Environment(field_elevation_ft=0, oat_c=15, qnh_inhg=29.92)
+        rwy = Runway(
+            name="Legacy input",
+            heading_deg=0,
+            tora_ft=10000,
+            toda_ft=10000,
+            asda_ft=10000,
+            elevation_ft=0,
+            condition=runway_condition.upper(),
+        )
+        flap = "DOWN" if flap_setting.upper() in {"FULL", "DOWN"} else "UP"
+        r = self.calculate(weight_lbs, env, rwy, flap)
+        return r.__dict__

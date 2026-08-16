@@ -1,77 +1,21 @@
-# Engine Model for F-14 Performance Toolkit
-# Fully refined F110 engine implementation (MIL, AB, REDUCED)
-# Includes interpolation, nonlinear RPM-thrust mapping, and variable AB fuel flow.
+"""Legacy engine-model compatibility wrapper for v3."""
 
-import numpy as np
-import pandas as pd
-from src.utils.data_loaders import resolve_data_path
+from src.f14perf.engine import F110Deck
+
 
 class EngineModel:
-    def __init__(self, csv_file="f110_tff_model.csv"):
-        self.df = pd.read_csv(resolve_data_path(csv_file))
+    def __init__(self, *_, **__):
+        self.deck = F110Deck()
 
-    def _interpolate_thrust(self, alt_ft: float, temp_c: float, mach: float, mode: str = "MIL") -> float:
-        """Interpolate thrust across altitude, temperature, and Mach."""
-        data = self.df
-
-        alt_vals = data["alt_ft"].unique()
-        temp_vals = data["Temp"].unique()
-
-        alt_ft = np.clip(alt_ft, min(alt_vals), max(alt_vals))
-        temp_c = np.clip(temp_c, min(temp_vals), max(temp_vals))
-
-        sub_df = data[(data["alt_ft"] == alt_ft) & (data["Temp"] == temp_c)]
-        if sub_df.empty:
-            base_thr = data.iloc[0]["THRUST_MIL"]
-        else:
-            base_thr = sub_df["THRUST_MIL"].values[0]
-
-        if mode.upper() == "MIL":
-            mach_corr = 1 + 0.25 * mach + 0.05 * mach**2
-            thrust = base_thr * mach_corr
-        elif mode.upper() == "AB":
-            mach_corr = 1 + 0.15 * mach
-            thrust = base_thr * 1.95 * mach_corr
-        elif mode.upper() == "REDUCED":
-            thrust = base_thr * 0.9
-        else:
-            raise ValueError(f"Unknown thrust mode: {mode}")
-
-        return thrust
-
-    def _thrust_to_rpm_ff(self, thrust: float, mode: str = "MIL") -> tuple:
-        """Map thrust to approximate RPM (%) and fuel flow (PPH)."""
-        if mode.upper() == "MIL":
-            if thrust < 5000:
-                rpm = 71 + (thrust / 5000) * 10
-                ff = 3000 + (thrust / 5000) * 2000
-            elif thrust < 12000:
-                rpm = 81 + (thrust - 5000) / 7000 * 10
-                ff = 5000 + (thrust - 5000) / 7000 * 4000
-            else:
-                rpm = 91 + (thrust - 12000) / 4000 * 8
-                ff = 9000 + (thrust - 12000) / 4000 * 3000
-        elif mode.upper() == "AB":
-            rpm = 99.5
-            ff = 20000 + (thrust - 25000) * 0.3
-        elif mode.upper() == "REDUCED":
-            rpm = 85 + (thrust / 18000) * 10
-            ff = 6000 + (thrust / 18000) * 4000
-        else:
-            raise ValueError(f"Unknown mode: {mode}")
-
-        return rpm, ff
-
-    def compute(self, alt_ft: float, temp_c: float, mach: float, mode: str = "MIL") -> dict:
-        """Unified F110 engine performance output."""
-        thrust = self._interpolate_thrust(alt_ft, temp_c, mach, mode)
-        rpm, ff = self._thrust_to_rpm_ff(thrust, mode)
+    def compute(self, alt_ft, temp_c, mach, mode="MIL", rpm_pct=100):
+        p = self.deck.point(alt_ft, mach, mode=mode, rpm_pct=rpm_pct, oat_c=temp_c)
         return {
-            "Engine": "F110",
+            "Engine": "F110-GE-400",
             "Mode": mode.upper(),
-            "Thrust": thrust,
-            "RPM": rpm,
-            "FuelFlow": ff,
+            "Thrust": p.thrust_lbf_per_engine,
+            "RPM": p.rpm_pct,
+            "FuelFlow": p.fuel_flow_pph_per_engine,
         }
 
-
+    def fuel_flow(self, rpm_pct, oat_c, alt_ft, mach=0.2):
+        return self.deck.point(alt_ft, mach, mode="MIL", rpm_pct=rpm_pct, oat_c=oat_c).fuel_flow_pph_per_engine
