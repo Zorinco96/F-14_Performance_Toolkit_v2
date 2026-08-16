@@ -204,11 +204,17 @@ with takeoff_tab:
     p2.metric("Thrust", takeoff.thrust_setting)
     p3.metric("Engine target", f"{takeoff.rpm_pct:.0f}% N2")
     p4.metric("FF reference", f"{takeoff.fuel_flow_pph_per_engine:,.0f} pph / engine")
-    c1, c2, c3, c4 = st.columns(4)
+    c1, c2, c3, c4, c5 = st.columns(5)
     c1.metric("V1", f"{takeoff.v1_kt:.0f} kt", f"table ref {takeoff.v1_reference_kt:.0f}")
     c2.metric("Vr", f"{takeoff.vr_kt:.0f} kt")
     c3.metric("V2", f"{takeoff.v2_kt:.0f} kt")
-    c4.metric("Vs ref", f"{takeoff.vs_kt:.0f} kt")
+    c4.metric("Vfs", f"{takeoff.vfs_kt:.0f} kt")
+    c5.metric(
+        "Trim target",
+        f"{takeoff.stabilizer_trim_target_kt:.0f} KIAS",
+        "midpoint V2 / Vfs",
+    )
+    st.caption(f"Vs reference: {takeoff.vs_kt:.0f} KIAS")
     d1, d2, d3, d4 = st.columns(4)
     d1.metric("ASD", f"{takeoff.asd_ft:.0f} ft", f"factored {takeoff.factored_asd_ft:.0f}")
     d2.metric("AGD", f"{takeoff.agd_ft:.0f} ft", f"factored {takeoff.factored_agd_ft:.0f}")
@@ -223,7 +229,10 @@ with takeoff_tab:
         f"{takeoff.credited_headwind_kt:+.1f} kt",
         f"raw {takeoff.headwind_kt:+.1f} kt",
     )
-    st.info(f"Stabilizer trim: NOT MODELED. {takeoff.stabilizer_trim_note}")
+    st.info(
+        f"Stabilator trim target: {takeoff.stabilizer_trim_target_kt:.0f} KIAS. "
+        f"{takeoff.stabilizer_trim_note}"
+    )
     for warning in takeoff.warnings:
         st.warning(warning)
     prov_caption(takeoff.provenance)
@@ -313,10 +322,18 @@ with mission_tab:
     st.subheader("Mission Card")
     mc1, mc2, mc3, mc4 = st.columns(4)
     mc1.metric("TO config", f"{takeoff.flaps} / {takeoff.thrust_setting}")
-    mc2.metric("V1 / Vr / V2", f"{takeoff.v1_kt:.0f} / {takeoff.vr_kt:.0f} / {takeoff.v2_kt:.0f}")
+    mc2.metric(
+        "V1 / Vr / V2 / Vfs",
+        f"{takeoff.v1_kt:.0f} / {takeoff.vr_kt:.0f} / "
+        f"{takeoff.v2_kt:.0f} / {takeoff.vfs_kt:.0f}",
+    )
     mc3.metric("Engine target", f"{takeoff.rpm_pct:.0f}% N2 / {takeoff.fuel_flow_pph_per_engine:,.0f} FF")
     mc4.metric("AEO climb", f"{takeoff.climb_gradient_ft_nm:.0f} ft/NM")
-    st.caption(f"Takeoff trim: NOT MODELED. {takeoff.stabilizer_trim_note}")
+    st.caption(
+        f"Takeoff trim: 000 before takeoff, then target approximately "
+        f"{takeoff.stabilizer_trim_target_kt:.0f} KIAS after liftoff "
+        f"(midpoint of V2 and Vfs)."
+    )
     mc5, mc6, mc7 = st.columns(3)
     mc5.metric("Cruise", f"M{cruise.optimum_mach:.3f} / FL{cruise.optimum_altitude_ft/100:.0f}")
     mc6.metric("Landing", f"15 units / ~{landing.on_speed_ias_est_kt:.0f} kt")
