@@ -20,6 +20,11 @@ def data_dir(tmp_path: Path) -> Path:
             "ASD_ft": asd, "AGD_ft": agd, "note": note,
         })
     pd.DataFrame(takeoff_rows).to_csv(tmp_path / "f14_perf.csv", index=False)
+    pd.DataFrame([
+        {"weight": 55000, "v1": 110, "vr": 120, "v2": 130, "vfs": 150},
+        {"weight": 65000, "v1": 120, "vr": 130, "v2": 140, "vfs": 160},
+        {"weight": 75000, "v1": 130, "vr": 140, "v2": 150, "vfs": 170},
+    ]).to_csv(tmp_path / "vspeeds.csv", index=False)
 
     engine_rows = [
         {"altitude_ft": 0, "mach": 0.2, "thrust_type": "IDLE", "thrust_lbf": 3000, "ff_pph": 1700},
